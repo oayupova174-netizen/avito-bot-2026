@@ -4,7 +4,6 @@ import requests
 import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,8 +13,6 @@ AVITO_CLIENT_SECRET = os.getenv("AVITO_CLIENT_SECRET")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 VK_GROUP_TOKEN = os.getenv("VK_GROUP_TOKEN")
 VK_CHAT_ID = os.getenv("VK_CHAT_ID")
-
-claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # Множество для хранения ID уже обработанных последних сообщений, чтобы не спамить повторно
 processed_messages = set()
@@ -77,14 +74,28 @@ def evaluate_resume_with_claude(candidate_text):
         "reason": "Краткое обоснование решения (почему подходит или нет)"
     }
     """
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
+    payload = {
+        "model": "claude-3-haiku-20240307",
+        "max_tokens": 200,
+        "system": system_prompt,
+        "messages": [
+            {"role": "user", "content": f"Текст отклика кандидата:\n{candidate_text}"}
+        ]
+    }
     try:
-        response = claude_client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=200,
-            system=system_prompt,
-            messages=[{"role": "user", "content": f"Текст отклика кандидата:\n{candidate_text}"}]
-        )
-        content = response.content[0].text.strip()
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        if response.status_code != 200:
+            print(f"[ОШИБКА CLAUDE API]: {response.status_code} {response.text}", flush=True)
+            return {"status": "Подумать", "reason": f"Ошибка API: {response.status_code}"}
+            
+        res_data = response.json()
+        content = res_data.get("content", [{}])[0].get("text", "").strip()
         
         start_idx = content.find('{')
         end_idx = content.rfind('}')
