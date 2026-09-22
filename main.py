@@ -79,7 +79,7 @@ def evaluate_resume_with_claude(candidate_text):
     """
     try:
         response = claude_client.messages.create(
-            model="claude-5-sonnet",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=200,
             system=system_prompt,
             messages=[{"role": "user", "content": f"Текст отклика кандидата:\n{candidate_text}"}]
