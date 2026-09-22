@@ -42,8 +42,10 @@ def get_avito_token():
         response = requests.post(url, data=payload, timeout=10)
         if response.status_code == 200:
             return response.json().get("access_token")
+        else:
+            print(f"[ОШИБКА АВИТО ТОКЕН]: Код {response.status_code} - {response.text}", flush=True)
     except Exception as e:
-        print(f"[ОШИБКА АВИТО ТОКЕН]: {e}", flush=True)
+        print(f"[ОШИБКА АВИТО ТОКЕН EXCEPTION]: {e}", flush=True)
     return None
 
 def get_avito_user_id(token):
@@ -53,8 +55,10 @@ def get_avito_user_id(token):
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             return res.json().get("id")
+        else:
+            print(f"[ОШИБКА USER ID]: Код {res.status_code} - {res.text}", flush=True)
     except Exception as e:
-        print(f"[ОШИБКА USER ID]: {e}", flush=True)
+        print(f"[ОШИБКА USER ID EXCEPTION]: {e}", flush=True)
     return None
 
 def generate_ai_reply(candidate_text):
@@ -107,6 +111,7 @@ def generate_ai_reply(candidate_text):
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=15)
         if response.status_code != 200:
+            print(f"[ОШИБКА CLAUDE API]: Код {response.status_code} - {response.text}", flush=True)
             return {"reply_text": "Привет! Подскажите, сколько вам лет и есть ли опыт в продажах?", "status": "Подумать", "reason": "Ошибка API ИИ"}
             
         res_data = response.json()
@@ -119,7 +124,7 @@ def generate_ai_reply(candidate_text):
             
         return json.loads(content)
     except Exception as e:
-        print(f"[ОШИБКА CLAUDE]: {e}", flush=True)
+        print(f"[ОШИБКА CLAUDE EXCEPTION]: {e}", flush=True)
         return {"reply_text": "Привет! Расскажите немного о своем опыте работы.", "status": "Подумать", "reason": "Сбой генерации"}
 
 def send_vk_notification(candidate_text, ai_reply, status, chat_id):
@@ -146,18 +151,25 @@ def send_vk_notification(candidate_text, ai_reply, status, chat_id):
         "v": "5.131"
     }
     try:
-        requests.post(url, data=params, timeout=10)
+        res = requests.post(url, data=params, timeout=10)
+        res_json = res.json()
+        if "error" in res_json:
+            print(f"[ОШИБКА VK API]: {res_json['error']}", flush=True)
+        else:
+            print(f"[VK SUCCESS] Уведомление успешно улетело в ВК (peer_id: {VK_CHAT_ID})", flush=True)
     except Exception as e:
-        print(f"[ОШИБКА VK]: {e}", flush=True)
+        print(f"[ОШИБКА VK EXCEPTION]: {e}", flush=True)
 
 def send_avito_reply(token, user_id, chat_id, text):
     url = f"https://api.avito.ru/messenger/v1/accounts/{user_id}/chats/{chat_id}/messages"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"message": {"text": text}, "type": "text"}
     try:
-        requests.post(url, headers=headers, json=payload, timeout=10)
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        if response.status_code != 200:
+            print(f"[ОШИБКА ОТВЕТА АВИТО]: Код {response.status_code} - {response.text}", flush=True)
     except Exception as e:
-        print(f"[ОШИБКА ОТВЕТА АВИТО]: {e}", flush=True)
+        print(f"[ОШИБКА ОТВЕТА АВИТО EXCEPTION]: {e}", flush=True)
 
 def check_and_process():
     token = get_avito_token()
@@ -173,6 +185,7 @@ def check_and_process():
     res = requests.get(url, headers=headers, timeout=10)
     
     if res.status_code != 200:
+        print(f"[ОШИБКА ЗАПРОСА ЧАТОВ АВИТО]: Код {res.status_code}", flush=True)
         return
 
     chats = res.json().get("chats", [])
@@ -214,7 +227,7 @@ def check_and_process():
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    print("[INIT] Бот с исправленной логикой опыта запущен...", flush=True)
+    print("[INIT] Бот с логированием ВК запущен...", flush=True)
     while True:
         try:
             check_and_process()
