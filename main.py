@@ -17,6 +17,9 @@ VK_CHAT_ID = os.getenv("VK_CHAT_ID")
 
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
+# Множество для хранения ID уже обработанных последних сообщений, чтобы не спамить повторно
+processed_messages = set()
+
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -131,7 +134,7 @@ def send_avito_reply(token, user_id, chat_id, text):
         print(f"[ОШИБКА ОТВЕТА АВИТО]: {e}", flush=True)
 
 def check_and_process():
-    print("[CHECK] Проверяем новые отклики Авито...", flush=True)
+    print("[CHECK] Проверяем свежие сообщения Авито...", flush=True)
     token = get_avito_token()
     if not token:
         return
@@ -151,34 +154,49 @@ def check_and_process():
         return
 
     chats = res.json().get("chats", [])
-    unread_chats = [c for c in chats if c.get("unread_count", 0) > 0]
-    print(f"[INFO] Всего получено чатов: {len(chats)}, из них непрочитанных: {len(unread_chats)}", flush=True)
+    print(f"[INFO] Получено чатов для проверки: {len(chats)}", flush=True)
     
-    for chat in unread_chats:
+    for chat in chats:
         chat_id = chat.get("id")
-        last_msg = chat.get("last_message", {}).get("content", {}).get("text", "")
+        last_msg_obj = chat.get("last_message", {})
         
-        if not last_msg:
+        msg_id = last_msg_obj.get("id")
+        author_id = last_msg_obj.get("author_id")
+        
+        # Пропускаем, если сообщение уже обрабатывали
+        if not msg_id or msg_id in processed_messages:
+            continue
+            
+        # Если автор сообщения — это мы сами (user_id), значит отвечать не нужно
+        if str(author_id) == str(user_id):
+            continue
+            
+        last_msg_text = last_msg_obj.get("content", {}).get("text", "")
+        if not last_msg_text:
             continue
 
-        print(f"[PROCESSING] Обрабатываем отклик из чата {chat_id}: {last_msg[:50]}...", flush=True)
-        result = evaluate_resume_with_claude(last_msg)
+        # Помечаем сообщение как обработанное
+        processed_messages.add(msg_id)
+        
+        print(f"[PROCESSING] Новое сообщение от кандидата в чате {chat_id}: {last_msg_text[:50]}...", flush=True)
+        
+        result = evaluate_resume_with_claude(last_msg_text)
         status = result.get("status")
         reason = result.get("reason")
 
         if status == "Подходит":
             send_avito_reply(token, user_id, chat_id, "Здравствуйте! Ваше резюме нас заинтересовало. Наш менеджер по персоналу свяжется с вами в ближайшее время для короткого интервью.")
-            send_vk_notification("Подходит", last_msg, reason, chat_id)
+            send_vk_notification("Подходит", last_msg_text, reason, chat_id)
         elif status == "Подумать":
             send_avito_reply(token, user_id, chat_id, "Здравствуйте! Спасибо за отклик. Уточните, пожалуйста, ваш возраст и подробности об опыте работы.")
-            send_vk_notification("Подумать", last_msg, reason, chat_id)
+            send_vk_notification("Подумать", last_msg_text, reason, chat_id)
         else:
             send_avito_reply(token, user_id, chat_id, "Здравствуйте! К сожалению, на данную вакансию мы ищем специалиста с другим опытом. Спасибо за интерес и успехов в поисках!")
-            send_vk_notification("Не подходит", last_msg, reason, chat_id)
+            send_vk_notification("Не подходит", last_msg_text, reason, chat_id)
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    print("[INIT] Бот запущен и готов к работе...", flush=True)
+    print("[INIT] Бот проверки по последним сообщениям запущен...", flush=True)
     while True:
         try:
             check_and_process()
