@@ -61,12 +61,36 @@ def get_avito_user_id(token):
         print(f"[ОШИБКА USER ID EXCEPTION]: {e}", flush=True)
     return None
 
-def generate_ai_reply(candidate_text):
+def get_chat_history(token, user_id, chat_id):
+    """Получает всю историю сообщений чата с Авито для анализа контекста"""
+    url = f"https://api.avito.ru/messenger/v1/accounts/{user_id}/chats/{chat_id}/messages?limit=20"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            messages_data = res.json().get("messages", [])
+            # Сортируем от старых к новым для правильного диалога
+            messages_data = sorted(messages_data, key=lambda x: x.get("created", 0))
+            formatted_history = []
+            for m in messages_data:
+                author_id = m.get("author_id")
+                text = m.get("content", {}).get("text", "")
+                if not text:
+                    continue
+                # Если author_id совпадает с нашим user_id, значит это писал бот/мы, иначе кандидат
+                role = "assistant" if str(author_id) == str(user_id) else "user"
+                formatted_history.append({"role": role, "content": text})
+            return formatted_history
+    except Exception as e:
+        print(f"[ОШИБКА ИСТОРИИ ЧАТА]: {e}", flush=True)
+    return []
+
+def generate_ai_reply(chat_history):
     system_prompt = """
     Ты — реальный рекрутер юридической компании. Общаешься в чате Авито как живой человек: просто, вежливо, без роботоподобных фраз.
     
     ГЛАВНАЯ ЦЕЛЬ БОТА: 
-    Быстро проверить кандидата, получить согласие на созвон и завершить диалог фразой о том, что HR-менеджер скоро позвонит. Никаких бесконечных переписок.
+    Быстро проверить кандидата, получить согласие на созвон и завершить диалог фразой о том, что HR-менеджер скоро позвонит. Анализируй всю историю переписки целиком, чтобы понимать контекст.
 
     Условия вакансии (менеджер по продажам):
     - График: 5/2.
@@ -78,17 +102,17 @@ def generate_ai_reply(candidate_text):
     - Студенты-очники и те, кто ищет подработку — не подходят.
 
     Инструкции для ответов:
-    1. ИГНОРИРОВАНИЕ ПРОЩАНИЙ И БЛАГОДАРНОСТЕЙ (СТРОГО!): Если кандидат пишет слова благодарности, прощается или ставит точку (например: «Спасибо», «Благодарю», «Понял», «Хорошо», «До свидания», «ок»), то НЕ ОТВЕЧАЙ НИЧЕГО. Верни пустую строку в `reply_text`, чтобы бот сохранял молчание и не донимал человека.
+    1. АНАЛИЗ ВЕТКИ И КОНТЕКСТА: Смотри на всю историю диалога. Если кандидат уже согласился на созвон, поблагодарил или диалог фактически завершен — не пиши лишнего.
     2. ОБРАБОТКА ОТКАЗОВ: Если кандидат пишет, что уже нашел работу, отказывается или ему неинтересно — ответь коротко и доброжелательно («Понял вас, спасибо за ответ! Успехов в поиске!») и поставь статус «Не подходит».
-    3. ФИЛЬТРАЦИЯ ПО ОПЫТУ И ВОЗРАСТУ (ВАЖНО!): 
-       - Если по возрасту подходит (25–40 лет), но нет опыта в продажах или опыт минимальный/другой — НИ В КОЕМ СЛУЧАЕ не ставь статус «Не подходит». Ставь статус «Подумать», мягко принимай информацию и говори, что HR-менеджер свяжется.
+    3. ФИЛЬТРАЦИЯ ПО ОПЫТУ И ВОЗРАСТУ: 
+       - Если по возрасту подходит (25–40 лет), но нет опыта в продажах или опыт минимальный — НИ В КОЕМ СЛУЧАЕ не ставь статус «Не подходит». Ставь статус «Подумать», мягко принимай информацию и говори, что HR-менеджер свяжется.
     4. ФИНАЛ ДЛЯ ПОДХОДЯЩИХ И «ПОДУМАТЬ»: 
-       - Если кандидат подтверждает возраст и условия / согласен на созвон — ты кратко отвечаешь и сразу ставишь точку: предлагаешь созвониться и говоришь, что HR свяжется. («Отлично! Передал ваш контакт HR-менеджеру, скоро вам позвонят для короткого созвона»). Больше вопросов задавать не нужно.
-    5. Если в сообщении кандидата нет информации о возрасте или опыте — мягко уточни это.
+       - Если кандидат подтверждает возраст и условия / согласен на созвон — ты кратко отвечаешь и сразу ставишь точку: предлагаешь созвониться и говоришь, что HR свяжется («Отлично! Передал ваш контакт HR-менеджеру, скоро вам позвонят для короткого созвона»). Больше вопросов задавать не нужно.
+    5. Если ключевой информации (возраст или опыт) в диалоге еще не было — мягко уточни это.
     
     Верни СТРОГО в формате JSON без лишнего текста:
     {
-        "reply_text": "Текст ответа или пустая строка "", если отвечать не нужно",
+        "reply_text": "Текст ответа соискателю (или пустая строка "", если отвечать не нужно)",
         "status": "Подходит" или "Подумать" или "Не подходит",
         "reason": "Краткая суть ответа или статус кандидата"
     }
@@ -101,11 +125,9 @@ def generate_ai_reply(candidate_text):
     }
     payload = {
         "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 300,
+        "max_tokens": 400,
         "system": system_prompt,
-        "messages": [
-            {"role": "user", "content": f"Сообщение кандидата:\n{candidate_text}"}
-        ]
+        "messages": chat_history
     }
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=15)
@@ -127,9 +149,8 @@ def generate_ai_reply(candidate_text):
         return {"reply_text": "", "status": "Подумать", "reason": "Сбой генерации"}
 
 def send_vk_notification(candidate_text, ai_reply, status, chat_id):
-    # Если бот решил промолчать (пустой ответ), то и в ВК спамить не нужно
     if not ai_reply or ai_reply.strip() == "":
-        print(f"[INFO] Бот проигнорировал сообщение (прощание/благодарность), в ВК не отправляем.", flush=True)
+        print(f"[INFO] Бот проигнорировал сообщение (контекст говорит, что ответ не нужен), в ВК не отправляем.", flush=True)
         return
 
     if status == "Подходит":
@@ -140,7 +161,7 @@ def send_vk_notification(candidate_text, ai_reply, status, chat_id):
         emoji = "❌"
 
     message = (
-        f"{emoji} Сообщение кандидата:\n"
+        f"{emoji} Последнее сообщение кандидата:\n"
         f"\"{candidate_text}\"\n\n"
         f"🤖 Ответ бота:\n\"{ai_reply}\"\n\n"
         f"🔗 Чат Авито: https://avito.ru/profile/messenger/channel/{chat_id}"
@@ -160,7 +181,7 @@ def send_vk_notification(candidate_text, ai_reply, status, chat_id):
         if "error" in res_json:
             print(f"[ОШИБКА VK API]: {res_json['error']}", flush=True)
         else:
-            print(f"[VK SUCCESS] Уведомление успешно улетело в ВК (peer_id: {VK_CHAT_ID})", flush=True)
+            print(f"[VK SUCCESS] Уведомление успешно улетело в ВК", flush=True)
     except Exception as e:
         print(f"[ОШИБКА VK EXCEPTION]: {e}", flush=True)
 
@@ -224,9 +245,14 @@ def check_and_process():
 
         processed_messages.add(msg_id)
         
-        print(f"[PROCESSING] Сообщение в чате {chat_id}: {last_msg_text[:50]}...", flush=True)
+        print(f"[PROCESSING] Новый контекст в чате {chat_id}, загружаем историю...", flush=True)
         
-        ai_data = generate_ai_reply(last_msg_text)
+        # Получаем всю ветку сообщений для анализа ИИ
+        chat_history = get_chat_history(token, user_id, chat_id)
+        if not chat_history:
+            chat_history = [{"role": "user", "content": last_msg_text}]
+
+        ai_data = generate_ai_reply(chat_history)
         reply_text = ai_data.get("reply_text", "")
         status = ai_data.get("status", "Подумать")
         
@@ -235,7 +261,7 @@ def check_and_process():
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    print("[INIT] Бот с защитой от ответов на благодарности запущен...", flush=True)
+    print("[INIT] Бот с анализом всей ветки диалога запущен...", flush=True)
     while True:
         try:
             check_and_process()
