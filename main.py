@@ -158,8 +158,11 @@ def check_and_process():
     
     for chat in chats:
         chat_id = chat.get("id")
-        last_msg_obj = chat.get("last_message", {})
+        last_msg_obj = chat.get("last_message")
         
+        if not last_msg_obj:
+            continue
+            
         msg_id = last_msg_obj.get("id")
         author_id = last_msg_obj.get("author_id")
         
@@ -171,7 +174,11 @@ def check_and_process():
         if str(author_id) == str(user_id):
             continue
             
-        last_msg_text = last_msg_obj.get("content", {}).get("text", "")
+        content_obj = last_msg_obj.get("content")
+        if not content_obj:
+            continue
+            
+        last_msg_text = content_obj.get("text", "")
         if not last_msg_text:
             continue
 
