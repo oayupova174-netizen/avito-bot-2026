@@ -14,7 +14,6 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 VK_GROUP_TOKEN = os.getenv("VK_GROUP_TOKEN")
 VK_CHAT_ID = os.getenv("VK_CHAT_ID")
 
-# Множество для хранения ID уже обработанных последних сообщений, чтобы не спамить повторно
 processed_messages = set()
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -43,9 +42,8 @@ def get_avito_token():
         response = requests.post(url, data=payload, timeout=10)
         if response.status_code == 200:
             return response.json().get("access_token")
-        print(f"[ОШИБКА АВИТО] Ошибка токена: {response.text}", flush=True)
     except Exception as e:
-        print(f"[ОШИБКА АВИТО ТАЙМАУТ]: {e}", flush=True)
+        print(f"[ОШИБКА АВИТО ТОКЕН]: {e}", flush=True)
     return None
 
 def get_avito_user_id(token):
@@ -56,22 +54,32 @@ def get_avito_user_id(token):
         if res.status_code == 200:
             return res.json().get("id")
     except Exception as e:
-        print(f"[ОШИБКА ПОЛУЧЕНИЯ USER ID]: {e}", flush=True)
+        print(f"[ОШИБКА USER ID]: {e}", flush=True)
     return None
 
-def evaluate_resume_with_claude(candidate_text):
+def generate_ai_reply(candidate_text):
     system_prompt = """
-    Ты — HR-ассистент юридической компании. Твоя задача — анализировать отклик кандидата на вакансию.
+    Ты — реальный рекрутер юридической компании. Общаешься в чате Авито как живой человек: просто, вежливо, но без роботоподобной вежливости и канцеляризмов (никаких «Здравствуйте, уважаемый кандидат»).
+    
+    Условия вакансии (менеджер по продажам):
+    - График: 5/2.
+    - Зарплата: оклад + процент за каждый договор (в среднем от 60 000 рублей, потолка нет).
     
     Требования к кандидатам:
-    - Возраст от 25 до 40 лет.
-    - Опыт работы в продажах от 1 года.
-    - Студенты-очники и те, кто ищет подработку — отклоняются.
+    - Возраст: от 25 до 40 лет.
+    - Опыт в продажах: от 1 года.
+    - Студенты-очники и те, кто ищет подработку — не подходят.
 
-    Оцени текст кандидата и верни СТРОГО в формате JSON:
+    Инструкции для ответов:
+    1. Если кандидат задает вопросы про зарплату или график — отвечай своими словами, опираясь на наши условия (5/2, от 60 000 руб. оклад + %, потолка нет).
+    2. Если в сообщении кандидата нет информации о возрасте или опыте — обязательно мягко и по-человечески уточни это.
+    3. Веди диалог естественно, доводя подходящих кандидатов до созвона.
+    
+    Верни СТРОГО в формате JSON без лишнего текста:
     {
+        "reply_text": "Живой ответ кандидату",
         "status": "Подходит" или "Подумать" или "Не подходит",
-        "reason": "Краткое обоснование решения (почему подходит или нет)"
+        "reason": "Краткая суть ответа или статус кандидата"
     }
     """
     url = "https://api.anthropic.com/v1/messages"
@@ -82,17 +90,16 @@ def evaluate_resume_with_claude(candidate_text):
     }
     payload = {
         "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 200,
+        "max_tokens": 300,
         "system": system_prompt,
         "messages": [
-            {"role": "user", "content": f"Текст отклика кандидата:\n{candidate_text}"}
+            {"role": "user", "content": f"Сообщение кандидата:\n{candidate_text}"}
         ]
     }
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=15)
         if response.status_code != 200:
-            print(f"[ОШИБКА CLAUDE API]: {response.status_code} {response.text}", flush=True)
-            return {"status": "Подумать", "reason": f"Ошибка API: {response.status_code}"}
+            return {"reply_text": "Привет! Подскажите, пожалуйста, есть ли у вас опыт в продажах от года и сколько вам лет?", "status": "Подумать", "reason": "Ошибка API ИИ"}
             
         res_data = response.json()
         content = res_data.get("content", [{}])[0].get("text", "").strip()
@@ -105,9 +112,9 @@ def evaluate_resume_with_claude(candidate_text):
         return json.loads(content)
     except Exception as e:
         print(f"[ОШИБКА CLAUDE]: {e}", flush=True)
-        return {"status": "Подумать", "reason": "Ошибка анализа ИИ"}
+        return {"reply_text": "Привет! Расскажите немного о своем опыте в продажах.", "status": "Подумать", "reason": "Сбой генерации"}
 
-def send_vk_notification(status, text, reason, chat_id):
+def send_vk_notification(candidate_text, ai_reply, status, chat_id):
     if status == "Подходит":
         emoji = "✅"
     elif status == "Подумать":
@@ -116,9 +123,9 @@ def send_vk_notification(status, text, reason, chat_id):
         emoji = "❌"
 
     message = (
-        f"{emoji} Статус: {status}\n\n"
-        f"Причина: {reason}\n"
-        f"Отклик: {text[:300]}...\n\n"
+        f"{emoji} Сообщение кандидата:\n"
+        f"\"{candidate_text}\"\n\n"
+        f"🤖 Ответ бота:\n\"{ai_reply}\"\n\n"
         f"🔗 Чат Авито: https://avito.ru/profile/messenger/channel/{chat_id}"
     )
     
@@ -145,26 +152,22 @@ def send_avito_reply(token, user_id, chat_id, text):
         print(f"[ОШИБКА ОТВЕТА АВИТО]: {e}", flush=True)
 
 def check_and_process():
-    print("[CHECK] Проверяем свежие сообщения Авито...", flush=True)
     token = get_avito_token()
     if not token:
         return
 
     user_id = get_avito_user_id(token)
     if not user_id:
-        print("[ОШИБКА]: Не удалось получить user_id", flush=True)
         return
 
-    url = f"https://api.avito.ru/messenger/v2/accounts/{user_id}/chats?limit=100&sort=-time"
+    url = f"https://api.avito.ru/messenger/v2/accounts/{user_id}/chats?limit=50&sort=-time"
     headers = {"Authorization": f"Bearer {token}"}
     res = requests.get(url, headers=headers, timeout=10)
     
     if res.status_code != 200:
-        print(f"[ОШИБКА ЧАТОВ АВИТО]: {res.status_code} {res.text}", flush=True)
         return
 
     chats = res.json().get("chats", [])
-    print(f"[INFO] Получено чатов для проверки: {len(chats)}", flush=True)
     
     for chat in chats:
         chat_id = chat.get("id")
@@ -192,25 +195,18 @@ def check_and_process():
 
         processed_messages.add(msg_id)
         
-        print(f"[PROCESSING] Новое сообщение от кандидата в чате {chat_id}: {last_msg_text[:50]}...", flush=True)
+        print(f"[PROCESSING] Сообщение в чате {chat_id}: {last_msg_text[:50]}...", flush=True)
         
-        result = evaluate_resume_with_claude(last_msg_text)
-        status = result.get("status")
-        reason = result.get("reason")
-
-        if status == "Подходит":
-            send_avito_reply(token, user_id, chat_id, "Здравствуйте! Ваше резюме нас заинтересовало. Наш менеджер по персоналу свяжется с вами в ближайшее время для короткого интервью.")
-            send_vk_notification("Подходит", last_msg_text, reason, chat_id)
-        elif status == "Подумать":
-            send_avito_reply(token, user_id, chat_id, "Здравствуйте! Спасибо за отклик. Уточните, пожалуйста, ваш возраст и подробности об опыте работы.")
-            send_vk_notification("Подумать", last_msg_text, reason, chat_id)
-        else:
-            send_avito_reply(token, user_id, chat_id, "Здравствуйте! К сожалению, на данную вакансию мы ищем специалиста с другим опытом. Спасибо за интерес и успехов в поисках!")
-            send_vk_notification("Не подходит", last_msg_text, reason, chat_id)
+        ai_data = generate_ai_reply(last_msg_text)
+        reply_text = ai_data.get("reply_text", "Привет!")
+        status = ai_data.get("status", "Подумать")
+        
+        send_avito_reply(token, user_id, chat_id, reply_text)
+        send_vk_notification(last_msg_text, reply_text, status, chat_id)
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    print("[INIT] Бот проверки по последним сообщениям запущен...", flush=True)
+    print("[INIT] Умный диалоговый бот с условиями запущен...", flush=True)
     while True:
         try:
             check_and_process()
