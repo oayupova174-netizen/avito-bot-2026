@@ -79,7 +79,7 @@ def evaluate_resume_with_claude(candidate_text):
     """
     try:
         response = claude_client.messages.create(
-            model="claude-3-5-sonnet-20240620",
+            model="claude-5-sonnet",
             max_tokens=200,
             system=system_prompt,
             messages=[{"role": "user", "content": f"Текст отклика кандидата:\n{candidate_text}"}]
@@ -144,7 +144,6 @@ def check_and_process():
         print("[ОШИБКА]: Не удалось получить user_id", flush=True)
         return
 
-    # Запрашиваем до 100 чатов, отсортированных по свежести (-time)
     url = f"https://api.avito.ru/messenger/v2/accounts/{user_id}/chats?limit=100&sort=-time"
     headers = {"Authorization": f"Bearer {token}"}
     res = requests.get(url, headers=headers, timeout=10)
@@ -166,11 +165,9 @@ def check_and_process():
         msg_id = last_msg_obj.get("id")
         author_id = last_msg_obj.get("author_id")
         
-        # Пропускаем, если сообщение уже обрабатывали
         if not msg_id or msg_id in processed_messages:
             continue
             
-        # Если автор сообщения — это мы сами (user_id), значит отвечать не нужно
         if str(author_id) == str(user_id):
             continue
             
@@ -182,7 +179,6 @@ def check_and_process():
         if not last_msg_text:
             continue
 
-        # Помечаем сообщение как обработанное
         processed_messages.add(msg_id)
         
         print(f"[PROCESSING] Новое сообщение от кандидата в чате {chat_id}: {last_msg_text[:50]}...", flush=True)
