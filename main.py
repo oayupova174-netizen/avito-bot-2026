@@ -119,7 +119,7 @@ def generate_ai_reply(chat_history):
         "content-type": "application/json"
     }
     payload = {
-        "model": "claude-haiku-4-5-20251001",
+        "model": "claude-3-5-haiku-20241022",
         "max_tokens": 400,
         "system": system_prompt,
         "messages": chat_history
@@ -128,7 +128,7 @@ def generate_ai_reply(chat_history):
         response = requests.post(url, headers=headers, json=payload, timeout=15)
         if response.status_code != 200:
             print(f"[ОШИБКА CLAUDE API]: Код {response.status_code} - {response.text}", flush=True)
-            return {"reply_text": "Привет! Подскажите, сколько вам лет и есть ли опыт в продажах?", "status": "Подумать", "reason": "Ошибка API ИИ"}
+            return {"reply_text": "", "status": "Подумать", "reason": "Ошибка API ИИ"}
             
         res_data = response.json()
         content = res_data.get("content", [{}])[0].get("text", "").strip()
@@ -141,7 +141,7 @@ def generate_ai_reply(chat_history):
         return json.loads(content)
     except Exception as e:
         print(f"[ОШИБКА CLAUDE EXCEPTION]: {e}", flush=True)
-        return {"reply_text": "Привет! Расскажите немного о своем опыте работы.", "status": "Подумать", "reason": "Сбой генерации"}
+        return {"reply_text": "", "status": "Подумать", "reason": "Сбой генерации"}
 
 def send_vk_notification(candidate_text, ai_reply, status, chat_id):
     if not ai_reply or ai_reply.strip() == "":
@@ -232,7 +232,7 @@ def check_and_process():
         if not content_obj:
             continue
             
-        last_msg_text = content_obj.get("text", "")
+        last_msg_text = content_obj.get("content", {}).get("text", "") or content_obj.get("text", "")
         if not last_msg_text:
             continue
 
@@ -248,8 +248,9 @@ def check_and_process():
         reply_text = ai_data.get("reply_text", "")
         status = ai_data.get("status", "Подумать")
         
-        send_avito_reply(token, user_id, chat_id, reply_text)
-        send_vk_notification(last_msg_text, reply_text, status, chat_id)
+        if reply_text:
+            send_avito_reply(token, user_id, chat_id, reply_text)
+            send_vk_notification(last_msg_text, reply_text, status, chat_id)
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
