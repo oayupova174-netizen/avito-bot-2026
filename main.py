@@ -7,18 +7,18 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import anthropic
 from dotenv import load_dotenv
 
-# Загружаем ключи из нашего файла .env
+# Загружаем ключи из переменных окружения
 load_dotenv()
 
 AVITO_CLIENT_ID = os.getenv("AVITO_CLIENT_ID")
 AVITO_CLIENT_SECRET = os.getenv("AVITO_CLIENT_SECRET")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+VK_GROUP_TOKEN = os.getenv("VK_GROUP_TOKEN")
+VK_CHAT_ID = os.getenv("VK_CHAT_ID")
 
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# --- Веб-сервер заглушка для обхода требований Render Web Service ---
+# --- Веб-сервер заглушка для Render Web Service ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -29,7 +29,7 @@ def run_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     server.serve_forever()
-# -------------------------------------------------------------------
+# --------------------------------------------------
 
 def get_avito_token():
     url = "https://api.avito.ru/token"
@@ -76,7 +76,6 @@ def evaluate_resume_with_claude(resume_text):
             messages=[{"role": "user", "content": f"Текст отклика/сообщения кандидата:\n{resume_text}"}]
         )
         content = response.content[0].text.strip()
-        # Безопасно очищаем маркдаун без сложного replace
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
@@ -87,7 +86,7 @@ def evaluate_resume_with_claude(resume_text):
         print(f"[ОШИБКА CLAUDE]: {e}")
         return {"status": "Подумать", "reason": "Ошибка авто-анализа, проверьте вручную."}
 
-def send_telegram_notification(status, text, reason, chat_id):
+def send_vk_notification(status, text, reason, chat_id):
     if status == "Подходит":
         emoji = "✅"
     elif status == "Подумать":
@@ -96,14 +95,26 @@ def send_telegram_notification(status, text, reason, chat_id):
         emoji = "❌"
 
     message = (
-        f"{emoji} <b>Статус отклика: {status}</b>\n\n"
-        f"<b>Причина:</b> {reason}\n"
-        f"<b>Текст отклика:</b> {text[:300]}...\n\n"
-        f"🔗 <a href='https://avito.ru/profile/messenger/channel/{chat_id}'>Открыть чат в Авито</a>"
+        f"{emoji} Статус отклика: {status}\n\n"
+        f"Причина: {reason}\n"
+        f"Текст отклика: {text[:300]}...\n\n"
+        f"Ссылка на чат Авито: https://avito.ru/profile/messenger/channel/{chat_id}"
     )
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-    requests.post(url, json=payload)
+    
+    url = "https://api.vk.com/method/messages.send"
+    params = {
+        "peer_id": VK_CHAT_ID,
+        "message": message,
+        "random_id": int(time.time() * 1000),
+        "access_token": VK_GROUP_TOKEN,
+        "v": "5.131"
+    }
+    try:
+        res = requests.post(url, data=params).json()
+        if "error" in res:
+            print(f"[ОШИБКА VK]: {res['error']['error_msg']}")
+    except Exception as e:
+        print(f"[ОШИБКА ОТПРАВКИ VK]: {e}")
 
 def send_avito_reply(token, chat_id, text):
     url = f"https://api.avito.ru/messenger/v1/accounts/self/chats/{chat_id}/messages"
@@ -137,16 +148,15 @@ def check_and_process():
 
         if status == "Подходит":
             send_avito_reply(token, chat_id, "Здравствуйте! Ваше резюме нас заинтересовало. Наш менеджер по персоналу свяжется с вами в ближайшее время для короткого интервью.")
-            send_telegram_notification("Подходит", last_msg, reason, chat_id)
+            send_vk_notification("Подходит", last_msg, reason, chat_id)
         elif status == "Подумать":
             send_avito_reply(token, chat_id, "Здравствуйте! Спасибо за отклик. Уточните, пожалуйста, ваш возраст и подробности об опыте работы.")
-            send_telegram_notification("Подумать", last_msg, reason, chat_id)
+            send_vk_notification("Подумать", last_msg, reason, chat_id)
         else:
             send_avito_reply(token, chat_id, "Здравствуйте! К сожалению, на данную вакансию мы ищем специалиста с другим опытом. Спасибо за интерес и успехов в поисках!")
-            send_telegram_notification("Не подходит", last_msg, reason, chat_id)
+            send_vk_notification("Не подходит", last_msg, reason, chat_id)
 
 if __name__ == "__main__":
-    # Запускаем фейковый веб-сервер в отдельном потоке
     print("Запускаем веб-сервер для поддержки Render Web Service...")
     threading.Thread(target=run_server, daemon=True).start()
 
