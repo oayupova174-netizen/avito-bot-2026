@@ -7,7 +7,6 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import anthropic
 from dotenv import load_dotenv
 
-# Загружаем ключи из переменных окружения
 load_dotenv()
 
 AVITO_CLIENT_ID = os.getenv("AVITO_CLIENT_ID")
@@ -18,18 +17,20 @@ VK_CHAT_ID = os.getenv("VK_CHAT_ID")
 
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# --- Веб-сервер заглушка для Render Web Service ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b'Bot is alive!')
+    
+    def log_message(self, format, *args):
+        return  # Отключаем спам логов сервера
 
 def run_server():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    print(f"[SERVER] Веб-сервер запущен на порту {port}")
     server.serve_forever()
-# --------------------------------------------------
 
 def get_avito_token():
     url = "https://api.avito.ru/token"
@@ -38,10 +39,13 @@ def get_avito_token():
         "client_id": AVITO_CLIENT_ID,
         "client_secret": AVITO_CLIENT_SECRET
     }
-    response = requests.post(url, data=payload)
-    if response.status_code == 200:
-        return response.json().get("access_token")
-    print(f"[ОШИБКА АВИТО] Не удалось получить токен: {response.text}")
+    try:
+        response = requests.post(url, data=payload, timeout=10)
+        if response.status_code == 200:
+            return response.json().get("access_token")
+        print(f"[ОШИБКА АВИТО] Ошибка токена: {response.text}")
+    except Exception as e:
+        print(f"[ОШИБКА АВИТО ТАЙМАУТ]: {e}")
     return None
 
 def evaluate_resume_with_claude(resume_text):
@@ -110,9 +114,11 @@ def send_vk_notification(status, text, reason, chat_id):
         "v": "5.131"
     }
     try:
-        res = requests.post(url, data=params).json()
+        res = requests.post(url, data=params, timeout=10).json()
         if "error" in res:
             print(f"[ОШИБКА VK]: {res['error']['error_msg']}")
+        else:
+            print(f"[УСПЕХ VK]: Уведомление отправлено в чат {VK_CHAT_ID}")
     except Exception as e:
         print(f"[ОШИБКА ОТПРАВКИ VK]: {e}")
 
@@ -120,21 +126,25 @@ def send_avito_reply(token, chat_id, text):
     url = f"https://api.avito.ru/messenger/v1/accounts/self/chats/{chat_id}/messages"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"message": {"text": text}, "type": "text"}
-    requests.post(url, headers=headers, json=payload)
+    requests.post(url, headers=headers, json=payload, timeout=10)
 
 def check_and_process():
+    print("[CHECK] Проверяем новые отклики Авито...")
     token = get_avito_token()
     if not token:
         return
 
     url = "https://api.avito.ru/messenger/v2/accounts/self/chats?unread_only=true"
     headers = {"Authorization": f"Bearer {token}"}
-    res = requests.get(url, headers=headers)
+    res = requests.get(url, headers=headers, timeout=10)
     
     if res.status_code != 200:
+        print(f"[ОШИБКА ЧАТОВ АВИТО]: {res.status_code} {res.text}")
         return
 
     chats = res.json().get("chats", [])
+    print(f"[INFO] Найдено непрочитанных чатов: {len(chats)}")
+    
     for chat in chats:
         chat_id = chat.get("id")
         last_msg = chat.get("last_message", {}).get("content", {}).get("text", "")
@@ -142,6 +152,7 @@ def check_and_process():
         if not last_msg:
             continue
 
+        print(f"[PROCESSING] Обрабатываем отклик из чата {chat_id}: {last_msg[:50]}...")
         result = evaluate_resume_with_claude(last_msg)
         status = result.get("status")
         reason = result.get("reason")
@@ -157,13 +168,11 @@ def check_and_process():
             send_vk_notification("Не подходит", last_msg, reason, chat_id)
 
 if __name__ == "__main__":
-    print("Запускаем веб-сервер для поддержки Render Web Service...")
     threading.Thread(target=run_server, daemon=True).start()
-
-    print("Бот запущен и проверяет отклики...")
+    print("[INIT] Запуск основного цикла проверки...")
     while True:
         try:
             check_and_process()
         except Exception as e:
-            print(f"Ошибка цикла: {e}")
+            print(f"[ОШИБКА ЦИКЛА]: {e}")
         time.sleep(60)
