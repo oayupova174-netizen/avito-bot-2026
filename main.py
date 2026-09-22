@@ -29,7 +29,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
 def run_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-    print(f"[SERVER] Веб-сервер запущен на порту {port}")
+    print(f"[SERVER] Веб-сервер запущен на порту {port}", flush=True)
     server.serve_forever()
 
 def get_avito_token():
@@ -43,9 +43,9 @@ def get_avito_token():
         response = requests.post(url, data=payload, timeout=10)
         if response.status_code == 200:
             return response.json().get("access_token")
-        print(f"[ОШИБКА АВИТО] Ошибка токена: {response.text}")
+        print(f"[ОШИБКА АВИТО] Ошибка токена: {response.text}", flush=True)
     except Exception as e:
-        print(f"[ОШИБКА АВИТО ТАЙМАУТ]: {e}")
+        print(f"[ОШИБКА АВИТО ТАЙМАУТ]: {e}", flush=True)
     return None
 
 def evaluate_resume_with_claude(resume_text):
@@ -87,7 +87,7 @@ def evaluate_resume_with_claude(resume_text):
             
         return json.loads(content)
     except Exception as e:
-        print(f"[ОШИБКА CLAUDE]: {e}")
+        print(f"[ОШИБКА CLAUDE]: {e}", flush=True)
         return {"status": "Подумать", "reason": "Ошибка авто-анализа, проверьте вручную."}
 
 def send_vk_notification(status, text, reason, chat_id):
@@ -116,20 +116,24 @@ def send_vk_notification(status, text, reason, chat_id):
     try:
         res = requests.post(url, data=params, timeout=10).json()
         if "error" in res:
-            print(f"[ОШИБКА VK]: {res['error']['error_msg']}")
+            print(f"[ОШИБКА VK]: {res['error']['error_msg']}", flush=True)
         else:
-            print(f"[УСПЕХ VK]: Уведомление отправлено в чат {VK_CHAT_ID}")
+            print(f"[УСПЕХ VK]: Уведомление отправлено в чат {VK_CHAT_ID}", flush=True)
     except Exception as e:
-        print(f"[ОШИБКА ОТПРАВКИ VK]: {e}")
+        print(f"[ОШИБКА ОТПРАВКИ VK]: {e}", flush=True)
 
 def send_avito_reply(token, chat_id, text):
     url = f"https://api.avito.ru/messenger/v1/accounts/self/chats/{chat_id}/messages"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"message": {"text": text}, "type": "text"}
-    requests.post(url, headers=headers, json=payload, timeout=10)
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        print(f"[АВИТО ОТВЕТ]: Статус отправки {res.status_code}", flush=True)
+    except Exception as e:
+        print(f"[ОШИБКА ОТВЕТА АВИТО]: {e}", flush=True)
 
 def check_and_process():
-    print("[CHECK] Проверяем новые отклики Авито...")
+    print("[CHECK] Проверяем новые отклики Авито...", flush=True)
     token = get_avito_token()
     if not token:
         return
@@ -139,11 +143,11 @@ def check_and_process():
     res = requests.get(url, headers=headers, timeout=10)
     
     if res.status_code != 200:
-        print(f"[ОШИБКА ЧАТОВ АВИТО]: {res.status_code} {res.text}")
+        print(f"[ОШИБКА ЧАТОВ АВИТО]: {res.status_code} {res.text}", flush=True)
         return
 
     chats = res.json().get("chats", [])
-    print(f"[INFO] Найдено непрочитанных чатов: {len(chats)}")
+    print(f"[INFO] Найдено непрочитанных чатов: {len(chats)}", flush=True)
     
     for chat in chats:
         chat_id = chat.get("id")
@@ -152,7 +156,7 @@ def check_and_process():
         if not last_msg:
             continue
 
-        print(f"[PROCESSING] Обрабатываем отклик из чата {chat_id}: {last_msg[:50]}...")
+        print(f"[PROCESSING] Обрабатываем отклик из чата {chat_id}: {last_msg[:50]}...", flush=True)
         result = evaluate_resume_with_claude(last_msg)
         status = result.get("status")
         reason = result.get("reason")
@@ -169,10 +173,10 @@ def check_and_process():
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    print("[INIT] Запуск основного цикла проверки...")
+    print("[INIT] Запуск основного цикла проверки...", flush=True)
     while True:
         try:
             check_and_process()
         except Exception as e:
-            print(f"[ОШИБКА ЦИКЛА]: {e}")
+            print(f"[ОШИБКА ЦИКЛА]: {e}", flush=True)
         time.sleep(60)
