@@ -76,5 +76,84 @@ def evaluate_resume_with_claude(resume_text):
             messages=[{"role": "user", "content": f"Текст отклика/сообщения кандидата:\n{resume_text}"}]
         )
         content = response.content[0].text.strip()
-        if content.startswith("```"):
-            content = content.replace("
+        # Безопасно очищаем маркдаун без сложного replace
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+            
+        return json.loads(content)
+    except Exception as e:
+        print(f"[ОШИБКА CLAUDE]: {e}")
+        return {"status": "Подумать", "reason": "Ошибка авто-анализа, проверьте вручную."}
+
+def send_telegram_notification(status, text, reason, chat_id):
+    if status == "Подходит":
+        emoji = "✅"
+    elif status == "Подумать":
+        emoji = "🤔"
+    else:
+        emoji = "❌"
+
+    message = (
+        f"{emoji} <b>Статус отклика: {status}</b>\n\n"
+        f"<b>Причина:</b> {reason}\n"
+        f"<b>Текст отклика:</b> {text[:300]}...\n\n"
+        f"🔗 <a href='https://avito.ru/profile/messenger/channel/{chat_id}'>Открыть чат в Авито</a>"
+    )
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    requests.post(url, json=payload)
+
+def send_avito_reply(token, chat_id, text):
+    url = f"https://api.avito.ru/messenger/v1/accounts/self/chats/{chat_id}/messages"
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {"message": {"text": text}, "type": "text"}
+    requests.post(url, headers=headers, json=payload)
+
+def check_and_process():
+    token = get_avito_token()
+    if not token:
+        return
+
+    url = "https://api.avito.ru/messenger/v2/accounts/self/chats?unread_only=true"
+    headers = {"Authorization": f"Bearer {token}"}
+    res = requests.get(url, headers=headers)
+    
+    if res.status_code != 200:
+        return
+
+    chats = res.json().get("chats", [])
+    for chat in chats:
+        chat_id = chat.get("id")
+        last_msg = chat.get("last_message", {}).get("content", {}).get("text", "")
+        
+        if not last_msg:
+            continue
+
+        result = evaluate_resume_with_claude(last_msg)
+        status = result.get("status")
+        reason = result.get("reason")
+
+        if status == "Подходит":
+            send_avito_reply(token, chat_id, "Здравствуйте! Ваше резюме нас заинтересовало. Наш менеджер по персоналу свяжется с вами в ближайшее время для короткого интервью.")
+            send_telegram_notification("Подходит", last_msg, reason, chat_id)
+        elif status == "Подумать":
+            send_avito_reply(token, chat_id, "Здравствуйте! Спасибо за отклик. Уточните, пожалуйста, ваш возраст и подробности об опыте работы.")
+            send_telegram_notification("Подумать", last_msg, reason, chat_id)
+        else:
+            send_avito_reply(token, chat_id, "Здравствуйте! К сожалению, на данную вакансию мы ищем специалиста с другим опытом. Спасибо за интерес и успехов в поисках!")
+            send_telegram_notification("Не подходит", last_msg, reason, chat_id)
+
+if __name__ == "__main__":
+    # Запускаем фейковый веб-сервер в отдельном потоке
+    print("Запускаем веб-сервер для поддержки Render Web Service...")
+    threading.Thread(target=run_server, daemon=True).start()
+
+    print("Бот запущен и проверяет отклики...")
+    while True:
+        try:
+            check_and_process()
+        except Exception as e:
+            print(f"Ошибка цикла: {e}")
+        time.sleep(60)
