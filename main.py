@@ -55,41 +55,31 @@ def get_avito_user_id(token):
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             return res.json().get("id")
-        print(f"[ОШИБКА USER ID]: {res.status_code} {res.text}", flush=True)
     except Exception as e:
         print(f"[ОШИБКА ПОЛУЧЕНИЯ USER ID]: {e}", flush=True)
     return None
 
-def evaluate_resume_with_claude(resume_text):
+def evaluate_resume_with_claude(candidate_text):
     system_prompt = """
-    Ты — строгий HR-ассистент юридической компании. Твоя задача — жестко квалифицировать отклик кандидата по критериям.
+    Ты — HR-ассистент юридической компании. Твоя задача — анализировать отклик кандидата на вакансию.
+    
+    Требования к кандидатам:
+    - Возраст от 25 до 40 лет.
+    - Опыт работы в продажах от 1 года.
+    - Студенты-очники и те, кто ищет подработку — отклоняются.
 
-    1. Категория "Подходит" (ВСЕ условия обязательны):
-       - Есть опыт работы в ПРОДАЖАХ от 1 года (любое направление).
-       - Возраст строго в диапазоне 25–40 лет.
-
-    2. Категория "Не подходит" (Любой из стоп-факторов):
-       - Вообще нет опыта работы.
-       - Ищет подработку, частичную занятость или совмещение.
-       - Школьник или студент (очного отделения).
-       - Возраст младше 21 года или старше 50 лет.
-
-    3. Категория "Подумать":
-       - Все остальные случаи, не попавшие в "Подходит" и "Не подходит" (например, возраст 22–24 или 41–49 при наличии опыта).
-       - Сообщение слишком короткое (например, "Привет", "Перезвоните"), нет данных о возрасте/опыте.
-
-    Отвечай СТРОГО в формате JSON без дополнительного текста:
+    Оцени текст кандидата и верни СТРОГО в формате JSON:
     {
         "status": "Подходит" или "Подумать" или "Не подходит",
-        "reason": "Краткое пояснение причины на 1 предложение"
+        "reason": "Краткое обоснование решения (почему подходит или нет)"
     }
     """
     try:
         response = claude_client.messages.create(
             model="claude-3-5-sonnet-20241022",
-            max_tokens=300,
+            max_tokens=200,
             system=system_prompt,
-            messages=[{"role": "user", "content": f"Текст отклика/сообщения кандидата:\n{resume_text}"}]
+            messages=[{"role": "user", "content": f"Текст отклика кандидата:\n{candidate_text}"}]
         )
         content = response.content[0].text.strip()
         
@@ -101,7 +91,7 @@ def evaluate_resume_with_claude(resume_text):
         return json.loads(content)
     except Exception as e:
         print(f"[ОШИБКА CLAUDE]: {e}", flush=True)
-        return {"status": "Подумать", "reason": "Ошибка авто-анализа, проверьте вручную."}
+        return {"status": "Подумать", "reason": "Ошибка анализа ИИ"}
 
 def send_vk_notification(status, text, reason, chat_id):
     if status == "Подходит":
@@ -112,10 +102,10 @@ def send_vk_notification(status, text, reason, chat_id):
         emoji = "❌"
 
     message = (
-        f"{emoji} Статус отклика: {status}\n\n"
+        f"{emoji} Статус: {status}\n\n"
         f"Причина: {reason}\n"
-        f"Текст отклика: {text[:300]}...\n\n"
-        f"Ссылка на чат Авито: https://avito.ru/profile/messenger/channel/{chat_id}"
+        f"Отклик: {text[:300]}...\n\n"
+        f"🔗 Чат Авито: https://avito.ru/profile/messenger/channel/{chat_id}"
     )
     
     url = "https://api.vk.com/method/messages.send"
@@ -127,21 +117,16 @@ def send_vk_notification(status, text, reason, chat_id):
         "v": "5.131"
     }
     try:
-        res = requests.post(url, data=params, timeout=10).json()
-        if "error" in res:
-            print(f"[ОШИБКА VK]: {res['error']['error_msg']}", flush=True)
-        else:
-            print(f"[УСПЕХ VK]: Уведомление отправлено в чат {VK_CHAT_ID}", flush=True)
+        requests.post(url, data=params, timeout=10)
     except Exception as e:
-        print(f"[ОШИБКА ОТПРАВКИ VK]: {e}", flush=True)
+        print(f"[ОШИБКА VK]: {e}", flush=True)
 
 def send_avito_reply(token, user_id, chat_id, text):
     url = f"https://api.avito.ru/messenger/v1/accounts/{user_id}/chats/{chat_id}/messages"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"message": {"text": text}, "type": "text"}
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
-        print(f"[АВИТО ОТВЕТ]: Статус отправки {res.status_code}", flush=True)
+        requests.post(url, headers=headers, json=payload, timeout=10)
     except Exception as e:
         print(f"[ОШИБКА ОТВЕТА АВИТО]: {e}", flush=True)
 
@@ -156,8 +141,8 @@ def check_and_process():
         print("[ОШИБКА]: Не удалось получить user_id", flush=True)
         return
 
-    # Запрашиваем чаты конкретного пользователя
-    url = f"https://api.avito.ru/messenger/v2/accounts/{user_id}/chats"
+    # Запрашиваем до 100 чатов, отсортированных по свежести (-time)
+    url = f"https://api.avito.ru/messenger/v2/accounts/{user_id}/chats?limit=100&sort=-time"
     headers = {"Authorization": f"Bearer {token}"}
     res = requests.get(url, headers=headers, timeout=10)
     
@@ -166,10 +151,8 @@ def check_and_process():
         return
 
     chats = res.json().get("chats", [])
-    
-    # Фильтруем непрочитанные чаты
     unread_chats = [c for c in chats if c.get("unread_count", 0) > 0]
-    print(f"[INFO] Всего чатов: {len(chats)}, из них непрочитанных: {len(unread_chats)}", flush=True)
+    print(f"[INFO] Всего получено чатов: {len(chats)}, из них непрочитанных: {len(unread_chats)}", flush=True)
     
     for chat in unread_chats:
         chat_id = chat.get("id")
@@ -195,7 +178,7 @@ def check_and_process():
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    print("[INIT] Запуск основного цикла проверки...", flush=True)
+    print("[INIT] Бот запущен и готов к работе...", flush=True)
     while True:
         try:
             check_and_process()
