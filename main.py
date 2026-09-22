@@ -81,7 +81,6 @@ def evaluate_resume_with_claude(resume_text):
         )
         content = response.content[0].text.strip()
         
-        # Безопасный парсинг JSON без сложных сплитов
         start_idx = content.find('{')
         end_idx = content.rfind('}')
         if start_idx != -1 and end_idx != -1:
@@ -140,19 +139,25 @@ def check_and_process():
     if not token:
         return
 
-    url = "https://api.avito.ru/messenger/v2/accounts/self/chats"
+    # Запрашиваем чаты через v1 API Messenger
+    url = "https://api.avito.ru/messenger/v1/accounts/self/chats"
     headers = {"Authorization": f"Bearer {token}"}
     res = requests.get(url, headers=headers, timeout=10)
     
     if res.status_code != 200:
-        print(f"[ОШИБКА ЧАТОВ АВИТО]: {res.status_code} {res.text}", flush=True)
-        return
+        print(f"[ОШИБКА ЧАТОВ АВИТО v1]: {res.status_code} {res.text}", flush=True)
+        # Пробуем fallback на v2 с лимитом
+        url_v2 = "https://api.avito.ru/messenger/v2/accounts/self/chats?limit=20"
+        res = requests.get(url_v2, headers=headers, timeout=10)
+        if res.status_code != 200:
+            print(f"[ОШИБКА ЧАТОВ АВИТО v2]: {res.status_code} {res.text}", flush=True)
+            return
 
     chats = res.json().get("chats", [])
     
-    # Фильтруем необработанные/непрочитанные чаты
+    # Фильтруем непрочитанные чаты
     unread_chats = [c for c in chats if c.get("unread_count", 0) > 0]
-    print(f"[INFO] Найдено непрочитанных чатов: {len(unread_chats)}", flush=True)
+    print(f"[INFO] Всего чатов: {len(chats)}, из них непрочитанных: {len(unread_chats)}", flush=True)
     
     for chat in unread_chats:
         chat_id = chat.get("id")
