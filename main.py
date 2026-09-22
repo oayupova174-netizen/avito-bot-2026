@@ -119,7 +119,7 @@ def generate_ai_reply(chat_history):
         "content-type": "application/json"
     }
     payload = {
-        "model": "claude-3-5-haiku-20241022",
+        "model": "claude-3-haiku-20240307",
         "max_tokens": 400,
         "system": system_prompt,
         "messages": chat_history
