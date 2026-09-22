@@ -24,7 +24,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(b'Bot is alive!')
     
     def log_message(self, format, *args):
-        return  # Отключаем спам логов сервера
+        return
 
 def run_server():
     port = int(os.environ.get("PORT", 10000))
@@ -46,6 +46,18 @@ def get_avito_token():
         print(f"[ОШИБКА АВИТО] Ошибка токена: {response.text}", flush=True)
     except Exception as e:
         print(f"[ОШИБКА АВИТО ТАЙМАУТ]: {e}", flush=True)
+    return None
+
+def get_avito_user_id(token):
+    url = "https://api.avito.ru/core/v1/accounts/self"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return res.json().get("id")
+        print(f"[ОШИБКА USER ID]: {res.status_code} {res.text}", flush=True)
+    except Exception as e:
+        print(f"[ОШИБКА ПОЛУЧЕНИЯ USER ID]: {e}", flush=True)
     return None
 
 def evaluate_resume_with_claude(resume_text):
@@ -123,8 +135,8 @@ def send_vk_notification(status, text, reason, chat_id):
     except Exception as e:
         print(f"[ОШИБКА ОТПРАВКИ VK]: {e}", flush=True)
 
-def send_avito_reply(token, chat_id, text):
-    url = f"https://api.avito.ru/messenger/v1/accounts/self/chats/{chat_id}/messages"
+def send_avito_reply(token, user_id, chat_id, text):
+    url = f"https://api.avito.ru/messenger/v1/accounts/{user_id}/chats/{chat_id}/messages"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"message": {"text": text}, "type": "text"}
     try:
@@ -139,19 +151,19 @@ def check_and_process():
     if not token:
         return
 
-    # Запрашиваем чаты через v1 API Messenger
-    url = "https://api.avito.ru/messenger/v1/accounts/self/chats"
+    user_id = get_avito_user_id(token)
+    if not user_id:
+        print("[ОШИБКА]: Не удалось получить user_id", flush=True)
+        return
+
+    # Запрашиваем чаты конкретного пользователя
+    url = f"https://api.avito.ru/messenger/v2/accounts/{user_id}/chats"
     headers = {"Authorization": f"Bearer {token}"}
     res = requests.get(url, headers=headers, timeout=10)
     
     if res.status_code != 200:
-        print(f"[ОШИБКА ЧАТОВ АВИТО v1]: {res.status_code} {res.text}", flush=True)
-        # Пробуем fallback на v2 с лимитом
-        url_v2 = "https://api.avito.ru/messenger/v2/accounts/self/chats?limit=20"
-        res = requests.get(url_v2, headers=headers, timeout=10)
-        if res.status_code != 200:
-            print(f"[ОШИБКА ЧАТОВ АВИТО v2]: {res.status_code} {res.text}", flush=True)
-            return
+        print(f"[ОШИБКА ЧАТОВ АВИТО]: {res.status_code} {res.text}", flush=True)
+        return
 
     chats = res.json().get("chats", [])
     
@@ -172,13 +184,13 @@ def check_and_process():
         reason = result.get("reason")
 
         if status == "Подходит":
-            send_avito_reply(token, chat_id, "Здравствуйте! Ваше резюме нас заинтересовало. Наш менеджер по персоналу свяжется с вами в ближайшее время для короткого интервью.")
+            send_avito_reply(token, user_id, chat_id, "Здравствуйте! Ваше резюме нас заинтересовало. Наш менеджер по персоналу свяжется с вами в ближайшее время для короткого интервью.")
             send_vk_notification("Подходит", last_msg, reason, chat_id)
         elif status == "Подумать":
-            send_avito_reply(token, chat_id, "Здравствуйте! Спасибо за отклик. Уточните, пожалуйста, ваш возраст и подробности об опыте работы.")
+            send_avito_reply(token, user_id, chat_id, "Здравствуйте! Спасибо за отклик. Уточните, пожалуйста, ваш возраст и подробности об опыте работы.")
             send_vk_notification("Подумать", last_msg, reason, chat_id)
         else:
-            send_avito_reply(token, chat_id, "Здравствуйте! К сожалению, на данную вакансию мы ищем специалиста с другим опытом. Спасибо за интерес и успехов в поисках!")
+            send_avito_reply(token, user_id, chat_id, "Здравствуйте! К сожалению, на данную вакансию мы ищем специалиста с другим опытом. Спасибо за интерес и успехов в поисках!")
             send_vk_notification("Не подходит", last_msg, reason, chat_id)
 
 if __name__ == "__main__":
