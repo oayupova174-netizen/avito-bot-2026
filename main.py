@@ -3,10 +3,44 @@ import time
 import requests
 import json
 import threading
+import certifi
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_max_ca_bundle_path = None
+
+def get_max_ca_bundle():
+    """Скачивает сертификаты Минцифры и объединяет их с обычным набором сертификатов,
+    чтобы requests могли проверять HTTPS-соединение с MAX API."""
+    global _max_ca_bundle_path
+    if _max_ca_bundle_path and os.path.exists(_max_ca_bundle_path):
+        return _max_ca_bundle_path
+
+    bundle_path = "/tmp/max_ca_bundle.pem"
+    try:
+        root_ca = requests.get(
+            "https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt",
+            verify=False, timeout=10
+        ).text
+        sub_ca = requests.get(
+            "https://gu-st.ru/content/lending/russian_trusted_sub_ca_pem.crt",
+            verify=False, timeout=10
+        ).text
+        with open(certifi.where(), "r", encoding="utf-8") as f:
+            base_bundle = f.read()
+        with open(bundle_path, "w", encoding="utf-8") as f:
+            f.write(base_bundle)
+            f.write("\n")
+            f.write(root_ca)
+            f.write("\n")
+            f.write(sub_ca)
+        _max_ca_bundle_path = bundle_path
+        return bundle_path
+    except Exception as e:
+        print(f"[ОШИБКА СЕРТИФИКАТА MAX]: {e}", flush=True)
+        return certifi.where()
 
 AVITO_CLIENT_ID = os.getenv("AVITO_CLIENT_ID")
 AVITO_CLIENT_SECRET = os.getenv("AVITO_CLIENT_SECRET")
@@ -24,7 +58,8 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
                 res = requests.get(
                     "https://platform-api2.max.ru/updates",
                     headers={"Authorization": max_token},
-                    timeout=10
+                    timeout=10,
+                    verify=get_max_ca_bundle()
                 )
                 body = res.text
             except Exception as e:
