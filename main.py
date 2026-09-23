@@ -202,9 +202,7 @@ def generate_ai_reply(chat_history):
         print(f"[ОШИБКА CLAUDE EXCEPTION]: {e}", flush=True)
         return {"reply_text": "", "status": "Подумать", "reason": "Сбой генерации"}
 
-def send_max_notification(candidate_text, ai_reply, status, chat_id):
-    if not ai_reply or ai_reply.strip() == "":
-        return
+def send_max_notification(candidate_name, candidate_city, status, chat_id):
     if not MAX_CHAT_ID:
         print("[ОШИБКА MAX]: не задана переменная MAX_CHAT_ID", flush=True)
         return
@@ -217,9 +215,8 @@ def send_max_notification(candidate_text, ai_reply, status, chat_id):
         emoji = "❌"
 
     message = (
-        f"{emoji} Последнее сообщение кандидата:\n"
-        f"\"{candidate_text}\"\n\n"
-        f"🤖 Ответ бота:\n\"{ai_reply}\"\n\n"
+        f"{emoji} {candidate_name}\n"
+        f"📍 {candidate_city}\n"
         f"🔗 Чат Авито: https://avito.ru/profile/messenger/channel/{chat_id}"
     )
 
@@ -300,7 +297,21 @@ def check_and_process():
         processed_messages.add(msg_id)
         
         print(f"[PROCESSING] Обработка чата {chat_id}, загружаем историю...", flush=True)
-        
+        print(f"[DEBUG CHAT OBJECT]: {json.dumps(chat, ensure_ascii=False)}", flush=True)
+
+        candidate_name = "Имя не указано"
+        for u in chat.get("users", []):
+            if str(u.get("id")) != str(user_id):
+                candidate_name = u.get("name", candidate_name)
+                break
+
+        candidate_city = "Город не указан"
+        context = chat.get("context") or {}
+        if context.get("type") == "item":
+            candidate_city = (
+                context.get("value", {}).get("location", {}).get("title", candidate_city)
+            )
+
         chat_history = get_chat_history(token, user_id, chat_id)
         if not chat_history:
             chat_history = [{"role": "user", "content": last_msg_text}]
@@ -311,7 +322,7 @@ def check_and_process():
         
         if reply_text:
             send_avito_reply(token, user_id, chat_id, reply_text)
-            send_max_notification(last_msg_text, reply_text, status, chat_id)
+            send_max_notification(candidate_name, candidate_city, status, chat_id)
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
