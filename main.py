@@ -5,17 +5,17 @@ import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
-
+ 
 load_dotenv()
-
+ 
 AVITO_CLIENT_ID = os.getenv("AVITO_CLIENT_ID")
 AVITO_CLIENT_SECRET = os.getenv("AVITO_CLIENT_SECRET")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 VK_GROUP_TOKEN = os.getenv("VK_GROUP_TOKEN")
 VK_CHAT_ID = os.getenv("VK_CHAT_ID")
-
+ 
 processed_messages = set()
-
+ 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -24,13 +24,13 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     
     def log_message(self, format, *args):
         return
-
+ 
 def run_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     print(f"[SERVER] Веб-сервер запущен на порту {port}", flush=True)
     server.serve_forever()
-
+ 
 def get_avito_token():
     url = "https://api.avito.ru/token"
     payload = {
@@ -47,7 +47,7 @@ def get_avito_token():
     except Exception as e:
         print(f"[ОШИБКА АВИТО ТОКЕН EXCEPTION]: {e}", flush=True)
     return None
-
+ 
 def get_avito_user_id(token):
     url = "https://api.avito.ru/core/v1/accounts/self"
     headers = {"Authorization": f"Bearer {token}"}
@@ -60,7 +60,7 @@ def get_avito_user_id(token):
     except Exception as e:
         print(f"[ОШИБКА USER ID EXCEPTION]: {e}", flush=True)
     return None
-
+ 
 def get_chat_history(token, user_id, chat_id):
     """Получает всю историю сообщений чата с Авито для анализа контекста"""
     url = f"https://api.avito.ru/messenger/v1/accounts/{user_id}/chats/{chat_id}/messages?limit=20"
@@ -82,14 +82,14 @@ def get_chat_history(token, user_id, chat_id):
     except Exception as e:
         print(f"[ОШИБКА ИСТОРИИ ЧАТА]: {e}", flush=True)
     return []
-
+ 
 def generate_ai_reply(chat_history):
     system_prompt = """
     Ты — реальный рекрутер юридической компании. Общаешься в чате Авито как живой человек: просто, вежливо, без роботоподобных фраз.
     
     ГЛАВНАЯ ЦЕЛЬ БОТА: 
     Быстро проверить кандидата, получить согласие на созвон и завершить диалог фразой о том, что HR-менеджер скоро позвонит. Анализируй всю историю переписки целиком.
-
+ 
     Условия вакансии (менеджер по продажам):
     - График: 5/2.
     - Зарплата: оклад + процент за каждый договор (в среднем от 60 000 рублей).
@@ -98,7 +98,7 @@ def generate_ai_reply(chat_history):
     - Возраст: от 25 до 40 лет.
     - Опыт в продажах: от 1 года.
     - Студенты-очники и те, кто ищет подработку — не подходят.
-
+ 
     Инструкции:
     1. Всегда отвечай на последнее сообщение кандидата. Не оставляй сообщения без ответа, если соискатель задает вопрос или присылает информацию.
     2. Если кандидат подтверждает возраст, условия и опыт — предлагай созвон и пиши, что HR свяжется («Отлично! Передал ваш контакт HR-менеджеру, скоро вам позвонят для короткого созвона»).
@@ -119,7 +119,7 @@ def generate_ai_reply(chat_history):
         "content-type": "application/json"
     }
     payload = {
-        "model": "claude-3-haiku-20240307",
+        "model": "claude-haiku-4-5-20251001",
         "max_tokens": 400,
         "system": system_prompt,
         "messages": chat_history
@@ -142,18 +142,18 @@ def generate_ai_reply(chat_history):
     except Exception as e:
         print(f"[ОШИБКА CLAUDE EXCEPTION]: {e}", flush=True)
         return {"reply_text": "", "status": "Подумать", "reason": "Сбой генерации"}
-
+ 
 def send_vk_notification(candidate_text, ai_reply, status, chat_id):
     if not ai_reply or ai_reply.strip() == "":
         return
-
+ 
     if status == "Подходит":
         emoji = "✅"
     elif status == "Подумать":
         emoji = "🤔"
     else:
         emoji = "❌"
-
+ 
     message = (
         f"{emoji} Последнее сообщение кандидата:\n"
         f"\"{candidate_text}\"\n\n"
@@ -178,11 +178,11 @@ def send_vk_notification(candidate_text, ai_reply, status, chat_id):
             print(f"[VK SUCCESS] Уведомление успешно улетело в ВК", flush=True)
     except Exception as e:
         print(f"[ОШИБКА VK EXCEPTION]: {e}", flush=True)
-
+ 
 def send_avito_reply(token, user_id, chat_id, text):
     if not text or text.strip() == "":
         return
-
+ 
     url = f"https://api.avito.ru/messenger/v1/accounts/{user_id}/chats/{chat_id}/messages"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"message": {"text": text}, "type": "text"}
@@ -192,16 +192,16 @@ def send_avito_reply(token, user_id, chat_id, text):
             print(f"[ОШИБКА ОТВЕТА АВИТО]: Код {response.status_code} - {response.text}", flush=True)
     except Exception as e:
         print(f"[ОШИБКА ОТВЕТА АВИТО EXCEPTION]: {e}", flush=True)
-
+ 
 def check_and_process():
     token = get_avito_token()
     if not token:
         return
-
+ 
     user_id = get_avito_user_id(token)
     if not user_id:
         return
-
+ 
     url = f"https://api.avito.ru/messenger/v2/accounts/{user_id}/chats?limit=50&sort=-time"
     headers = {"Authorization": f"Bearer {token}"}
     res = requests.get(url, headers=headers, timeout=10)
@@ -209,7 +209,7 @@ def check_and_process():
     if res.status_code != 200:
         print(f"[ОШИБКА ЗАПРОСА ЧАТОВ АВИТО]: Код {res.status_code}", flush=True)
         return
-
+ 
     chats = res.json().get("chats", [])
     
     for chat in chats:
@@ -235,7 +235,7 @@ def check_and_process():
         last_msg_text = content_obj.get("content", {}).get("text", "") or content_obj.get("text", "")
         if not last_msg_text:
             continue
-
+ 
         processed_messages.add(msg_id)
         
         print(f"[PROCESSING] Обработка чата {chat_id}, загружаем историю...", flush=True)
@@ -243,7 +243,7 @@ def check_and_process():
         chat_history = get_chat_history(token, user_id, chat_id)
         if not chat_history:
             chat_history = [{"role": "user", "content": last_msg_text}]
-
+ 
         ai_data = generate_ai_reply(chat_history)
         reply_text = ai_data.get("reply_text", "")
         status = ai_data.get("status", "Подумать")
@@ -251,7 +251,7 @@ def check_and_process():
         if reply_text:
             send_avito_reply(token, user_id, chat_id, reply_text)
             send_vk_notification(last_msg_text, reply_text, status, chat_id)
-
+ 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
     print("[INIT] Бот запущен и готов отвечать на сообщения...", flush=True)
@@ -261,3 +261,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"[ОШИБКА ЦИКЛА]: {e}", flush=True)
         time.sleep(60)
+ 
