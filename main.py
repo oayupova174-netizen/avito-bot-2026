@@ -336,6 +336,7 @@ def check_and_process():
 
     chats = res.json().get("chats", [])
     job_applications = get_job_applications_map(token)
+    print(f"[DEBUG APPLICATIONS]: найдено {len(job_applications)} сопоставленных откликов, ключи: {list(job_applications.keys())[:5]}", flush=True)
     
     for chat in chats:
         chat_id = chat.get("id")
