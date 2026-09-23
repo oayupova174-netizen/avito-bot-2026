@@ -12,12 +12,28 @@ AVITO_CLIENT_ID = os.getenv("AVITO_CLIENT_ID")
 AVITO_CLIENT_SECRET = os.getenv("AVITO_CLIENT_SECRET")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 VK_GROUP_TOKEN = os.getenv("VK_GROUP_TOKEN")
-VK_CHAT_ID = os.getenv("VK_CHAT_ID")
+VK_EMPLOYEE_IDS = [pid.strip() for pid in os.getenv("VK_EMPLOYEE_IDS", "").split(",") if pid.strip()]
 
 processed_messages = set()
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/max_updates"):
+            max_token = os.getenv("MAX_BOT_TOKEN", "")
+            try:
+                res = requests.get(
+                    "https://platform-api2.max.ru/updates",
+                    headers={"Authorization": max_token},
+                    timeout=10
+                )
+                body = res.text
+            except Exception as e:
+                body = f"ERROR: {e}"
+            self.send_response(200)
+            self.send_header("Content-type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(body.encode("utf-8"))
+            return
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b'Bot is alive!')
@@ -168,24 +184,25 @@ def send_vk_notification(candidate_text, ai_reply, status, chat_id):
         f"🤖 Ответ бота:\n\"{ai_reply}\"\n\n"
         f"🔗 Чат Авито: https://avito.ru/profile/messenger/channel/{chat_id}"
     )
-    
+
     url = "https://api.vk.com/method/messages.send"
-    params = {
-        "peer_id": VK_CHAT_ID,
-        "message": message,
-        "random_id": int(time.time() * 1000),
-        "access_token": VK_GROUP_TOKEN,
-        "v": "5.131"
-    }
-    try:
-        res = requests.post(url, data=params, timeout=10)
-        res_json = res.json()
-        if "error" in res_json:
-            print(f"[ОШИБКА VK API]: {res_json['error']}", flush=True)
-        else:
-            print(f"[VK SUCCESS] Уведомление успешно улетело в ВК", flush=True)
-    except Exception as e:
-        print(f"[ОШИБКА VK EXCEPTION]: {e}", flush=True)
+    for peer_id in VK_EMPLOYEE_IDS:
+        params = {
+            "peer_id": peer_id,
+            "message": message,
+            "random_id": int(time.time() * 1000) + hash(peer_id) % 1000,
+            "access_token": VK_GROUP_TOKEN,
+            "v": "5.131"
+        }
+        try:
+            res = requests.post(url, data=params, timeout=10)
+            res_json = res.json()
+            if "error" in res_json:
+                print(f"[ОШИБКА VK API] (peer_id={peer_id}): {res_json['error']}", flush=True)
+            else:
+                print(f"[VK SUCCESS] Уведомление отправлено {peer_id}", flush=True)
+        except Exception as e:
+            print(f"[ОШИБКА VK EXCEPTION] (peer_id={peer_id}): {e}", flush=True)
 
 def send_avito_reply(token, user_id, chat_id, text):
     if not text or text.strip() == "":
