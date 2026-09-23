@@ -45,8 +45,8 @@ def get_max_ca_bundle():
 AVITO_CLIENT_ID = os.getenv("AVITO_CLIENT_ID")
 AVITO_CLIENT_SECRET = os.getenv("AVITO_CLIENT_SECRET")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-VK_GROUP_TOKEN = os.getenv("VK_GROUP_TOKEN")
-VK_EMPLOYEE_IDS = [pid.strip() for pid in os.getenv("VK_EMPLOYEE_IDS", "").split(",") if pid.strip()]
+MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN")
+MAX_CHAT_ID = os.getenv("MAX_CHAT_ID")
 
 processed_messages = set()
 
@@ -202,8 +202,11 @@ def generate_ai_reply(chat_history):
         print(f"[ОШИБКА CLAUDE EXCEPTION]: {e}", flush=True)
         return {"reply_text": "", "status": "Подумать", "reason": "Сбой генерации"}
 
-def send_vk_notification(candidate_text, ai_reply, status, chat_id):
+def send_max_notification(candidate_text, ai_reply, status, chat_id):
     if not ai_reply or ai_reply.strip() == "":
+        return
+    if not MAX_CHAT_ID:
+        print("[ОШИБКА MAX]: не задана переменная MAX_CHAT_ID", flush=True)
         return
 
     if status == "Подходит":
@@ -220,24 +223,22 @@ def send_vk_notification(candidate_text, ai_reply, status, chat_id):
         f"🔗 Чат Авито: https://avito.ru/profile/messenger/channel/{chat_id}"
     )
 
-    url = "https://api.vk.com/method/messages.send"
-    for peer_id in VK_EMPLOYEE_IDS:
-        params = {
-            "peer_id": peer_id,
-            "message": message,
-            "random_id": int(time.time() * 1000) + hash(peer_id) % 1000,
-            "access_token": VK_GROUP_TOKEN,
-            "v": "5.131"
-        }
-        try:
-            res = requests.post(url, data=params, timeout=10)
-            res_json = res.json()
-            if "error" in res_json:
-                print(f"[ОШИБКА VK API] (peer_id={peer_id}): {res_json['error']}", flush=True)
-            else:
-                print(f"[VK SUCCESS] Уведомление отправлено {peer_id}", flush=True)
-        except Exception as e:
-            print(f"[ОШИБКА VK EXCEPTION] (peer_id={peer_id}): {e}", flush=True)
+    url = f"https://platform-api2.max.ru/messages?chat_id={MAX_CHAT_ID}"
+    headers = {
+        "Authorization": MAX_BOT_TOKEN,
+        "Content-Type": "application/json"
+    }
+    try:
+        res = requests.post(
+            url, headers=headers, json={"text": message},
+            timeout=10, verify=get_max_ca_bundle()
+        )
+        if res.status_code != 200:
+            print(f"[ОШИБКА MAX API]: Код {res.status_code} - {res.text}", flush=True)
+        else:
+            print("[MAX SUCCESS] Уведомление отправлено в чат MAX", flush=True)
+    except Exception as e:
+        print(f"[ОШИБКА MAX EXCEPTION]: {e}", flush=True)
 
 def send_avito_reply(token, user_id, chat_id, text):
     if not text or text.strip() == "":
@@ -310,7 +311,7 @@ def check_and_process():
         
         if reply_text:
             send_avito_reply(token, user_id, chat_id, reply_text)
-            send_vk_notification(last_msg_text, reply_text, status, chat_id)
+            send_max_notification(last_msg_text, reply_text, status, chat_id)
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
