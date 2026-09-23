@@ -168,6 +168,8 @@ def generate_ai_reply(chat_history):
     {
         "reply_text": "Текст ответа соискателю",
         "status": "Подходит" или "Подумать" или "Не подходит",
+        "age": "Возраст кандидата числом, если он называл его где-либо в диалоге, иначе строка «не указан»",
+        "phone": "Номер телефона кандидата, если он называл его где-либо в диалоге, иначе строка «не указан»",
         "reason": "Краткая суть ответа или статус"
     }
     """
@@ -202,7 +204,7 @@ def generate_ai_reply(chat_history):
         print(f"[ОШИБКА CLAUDE EXCEPTION]: {e}", flush=True)
         return {"reply_text": "", "status": "Подумать", "reason": "Сбой генерации"}
 
-def send_max_notification(candidate_name, candidate_city, status, chat_id):
+def send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, status, chat_id):
     if not MAX_CHAT_ID:
         print("[ОШИБКА MAX]: не задана переменная MAX_CHAT_ID", flush=True)
         return
@@ -217,6 +219,8 @@ def send_max_notification(candidate_name, candidate_city, status, chat_id):
     message = (
         f"{emoji} {candidate_name}\n"
         f"📍 {candidate_city}\n"
+        f"🎂 Возраст: {candidate_age}\n"
+        f"📞 Телефон: {candidate_phone}\n"
         f"🔗 Чат Авито: https://avito.ru/profile/messenger/channel/{chat_id}"
     )
 
@@ -251,6 +255,68 @@ def send_avito_reply(token, user_id, chat_id, text):
     except Exception as e:
         print(f"[ОШИБКА ОТВЕТА АВИТО EXCEPTION]: {e}", flush=True)
 
+def get_job_applications_map(token, days=3):
+    """Возвращает словарь {chat_id: {name, age, phone}} из последних откликов на вакансии
+    (метод /job/v1/applications) — там открыты реальные ФИО, возраст и телефон кандидата."""
+    from datetime import datetime, timedelta, timezone
+    date_from = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    ids = []
+    cursor = None
+    try:
+        while True:
+            params = {"updatedAtFrom": date_from}
+            if cursor:
+                params["cursor"] = cursor
+            res = requests.get(
+                "https://api.avito.ru/job/v1/applications/get_ids",
+                headers=headers, params=params, timeout=10
+            )
+            if res.status_code != 200:
+                print(f"[ОШИБКА ПОЛУЧЕНИЯ ОТКЛИКОВ]: Код {res.status_code} - {res.text}", flush=True)
+                break
+            batch = res.json().get("applies", [])
+            if not batch:
+                break
+            ids.extend([item["id"] for item in batch])
+            if len(batch) < 100:
+                break
+            cursor = batch[-1]["id"]
+    except Exception as e:
+        print(f"[ОШИБКА ПОЛУЧЕНИЯ ОТКЛИКОВ EXCEPTION]: {e}", flush=True)
+        return {}
+
+    result = {}
+    for i in range(0, len(ids), 100):
+        batch_ids = ids[i:i + 100]
+        try:
+            res = requests.post(
+                "https://api.avito.ru/job/v1/applications/get_by_ids",
+                headers={**headers, "Content-Type": "application/json"},
+                json={"ids": batch_ids}, timeout=10
+            )
+            if res.status_code != 200:
+                print(f"[ОШИБКА ДЕТАЛЕЙ ОТКЛИКОВ]: Код {res.status_code} - {res.text}", flush=True)
+                continue
+            for item in res.json().get("applies", []):
+                chat_value = item.get("contacts", {}).get("chat", {}).get("value")
+                if not chat_value:
+                    continue
+                name = item.get("applicant", {}).get("data", {}).get("name") or "Имя не указано"
+                age = item.get("enriched_properties", {}).get("age", {}).get("value")
+                phones = item.get("contacts", {}).get("phones", [])
+                phone = phones[0].get("value") if phones else None
+                result[chat_value] = {
+                    "name": name,
+                    "age": str(age) if age else "не указан",
+                    "phone": phone if phone else "не указан"
+                }
+        except Exception as e:
+            print(f"[ОШИБКА ДЕТАЛЕЙ ОТКЛИКОВ EXCEPTION]: {e}", flush=True)
+
+    return result
+
 def check_and_process():
     token = get_avito_token()
     if not token:
@@ -269,6 +335,7 @@ def check_and_process():
         return
 
     chats = res.json().get("chats", [])
+    job_applications = get_job_applications_map(token)
     
     for chat in chats:
         chat_id = chat.get("id")
@@ -318,10 +385,19 @@ def check_and_process():
         ai_data = generate_ai_reply(chat_history)
         reply_text = ai_data.get("reply_text", "")
         status = ai_data.get("status", "Подумать")
+
+        app_info = job_applications.get(chat_id)
+        if app_info:
+            candidate_name = app_info["name"]
+            candidate_age = app_info["age"]
+            candidate_phone = app_info["phone"]
+        else:
+            candidate_age = ai_data.get("age", "не указан")
+            candidate_phone = ai_data.get("phone", "не указан")
         
         if reply_text:
             send_avito_reply(token, user_id, chat_id, reply_text)
-            send_max_notification(candidate_name, candidate_city, status, chat_id)
+            send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, status, chat_id)
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
