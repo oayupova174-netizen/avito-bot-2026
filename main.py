@@ -255,7 +255,7 @@ def send_avito_reply(token, user_id, chat_id, text):
     except Exception as e:
         print(f"[ОШИБКА ОТВЕТА АВИТО EXCEPTION]: {e}", flush=True)
 
-def get_job_applications_map(token, days=3):
+def get_job_applications_map(token, days=30):
     """Возвращает словарь {chat_id: {name, age, phone}} из последних откликов на вакансии
     (метод /job/v1/applications) — там открыты реальные ФИО, возраст и телефон кандидата."""
     from datetime import datetime, timedelta, timezone
@@ -266,13 +266,14 @@ def get_job_applications_map(token, days=3):
     cursor = None
     try:
         while True:
-            params = {"updatedAtFrom": date_from}
+            params = {"updatedAtFrom": date_from, "createdAtFrom": date_from}
             if cursor:
                 params["cursor"] = cursor
             res = requests.get(
                 "https://api.avito.ru/job/v1/applications/get_ids",
                 headers=headers, params=params, timeout=10
             )
+            print(f"[DEBUG GET_IDS]: Код {res.status_code}, тело: {res.text[:500]}", flush=True)
             if res.status_code != 200:
                 print(f"[ОШИБКА ПОЛУЧЕНИЯ ОТКЛИКОВ]: Код {res.status_code} - {res.text}", flush=True)
                 break
@@ -347,7 +348,11 @@ def check_and_process():
             
         msg_id = last_msg_obj.get("id")
         author_id = last_msg_obj.get("author_id")
-        
+        msg_type = last_msg_obj.get("type")
+
+        if msg_type == "system":
+            continue
+
         if not msg_id or msg_id in processed_messages:
             continue
             
