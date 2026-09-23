@@ -297,7 +297,6 @@ def check_and_process():
         processed_messages.add(msg_id)
         
         print(f"[PROCESSING] Обработка чата {chat_id}, загружаем историю...", flush=True)
-        print(f"[DEBUG CHAT OBJECT]: {json.dumps(chat, ensure_ascii=False)}", flush=True)
 
         candidate_name = "Имя не указано"
         for u in chat.get("users", []):
