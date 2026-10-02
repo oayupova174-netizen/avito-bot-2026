@@ -385,12 +385,22 @@ def check_and_process():
         # Новый отклик: Авито создаёт чат с системным сообщением
         # ("Кандидат откликнулся..."), а сам кандидат ещё ничего не написал.
         # Пишем ему первыми и сразу уведомляем MAX о новом отклике.
+        # ВАЖНО: реагируем только на СВЕЖИЕ системные сообщения (последние 10 минут),
+        # чтобы после перезапуска бот не начал писать по всем старым открытым откликам.
         if msg_type == "system":
-            if chat_id not in initiated_chats:
+            msg_created = last_msg_obj.get("created", 0) or 0
+            age_seconds = time.time() - msg_created
+            is_recent = age_seconds < 600  # 10 минут
+
+            if chat_id not in initiated_chats and is_recent:
                 initiated_chats.add(chat_id)
                 print(f"[FIRST CONTACT] Новый отклик в чате {chat_id}, пишем кандидату первыми", flush=True)
                 send_avito_reply(token, user_id, chat_id, OPENING_MESSAGE)
                 send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, "Подумать", chat_id)
+            else:
+                # старое системное сообщение (или уже обработанное) — просто запоминаем чат,
+                # чтобы не возвращаться к нему снова
+                initiated_chats.add(chat_id)
             continue
 
         if not msg_id or msg_id in processed_messages:
