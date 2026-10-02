@@ -49,6 +49,7 @@ MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN")
 MAX_CHAT_ID = os.getenv("MAX_CHAT_ID")
 
 processed_messages = set()
+initiated_chats = set()
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -204,6 +205,12 @@ def generate_ai_reply(chat_history):
         print(f"[ОШИБКА CLAUDE EXCEPTION]: {e}", flush=True)
         return {"reply_text": "", "status": "Подумать", "reason": "Сбой генерации"}
 
+OPENING_MESSAGE = (
+    "Добрый день! Меня зовут Полина, я рекрутер. Увидела ваш отклик на вакансию "
+    "«Менеджер по продажам». Подскажите, пожалуйста, сколько вам лет и был ли у вас "
+    "опыт работы в продажах — если да, то сколько по времени?"
+)
+
 def send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, status, chat_id):
     if not MAX_CHAT_ID:
         print("[ОШИБКА MAX]: не задана переменная MAX_CHAT_ID", flush=True)
@@ -342,49 +349,16 @@ def check_and_process():
     chats = res.json().get("chats", [])
     job_applications = get_job_applications_map(token)
 
-    print(f"[DEBUG CHATS]: всего чатов получено: {len(chats)}", flush=True)
-
     for chat in chats:
         chat_id = chat.get("id")
         last_msg_obj = chat.get("last_message")
 
         if not last_msg_obj:
-            print(f"[DEBUG CHAT {chat_id}]: нет last_message, пропуск", flush=True)
             continue
 
         msg_id = last_msg_obj.get("id")
         author_id = last_msg_obj.get("author_id")
         msg_type = last_msg_obj.get("type")
-        already_processed = msg_id in processed_messages
-
-        print(
-            f"[DEBUG CHAT {chat_id}]: msg_id={msg_id}, author_id={author_id}, "
-            f"type={msg_type}, already_processed={already_processed}, "
-            f"is_own_user={str(author_id) == str(user_id)}",
-            flush=True
-        )
-
-        if msg_type == "system":
-            print(f"[DEBUG SYSTEM CONTENT {chat_id}]: {json.dumps(last_msg_obj, ensure_ascii=False)[:500]}", flush=True)
-            continue
-
-        if not msg_id or msg_id in processed_messages:
-            continue
-
-        if str(author_id) == str(user_id):
-            continue
-            
-        content_obj = last_msg_obj.get("content")
-        if not content_obj:
-            continue
-            
-        last_msg_text = content_obj.get("content", {}).get("text", "") or content_obj.get("text", "")
-        if not last_msg_text:
-            continue
-
-        processed_messages.add(msg_id)
-        
-        print(f"[PROCESSING] Обработка чата {chat_id}, загружаем историю...", flush=True)
 
         candidate_name = "Имя не указано"
         for u in chat.get("users", []):
@@ -398,6 +372,45 @@ def check_and_process():
             candidate_city = (
                 context.get("value", {}).get("location", {}).get("title", candidate_city)
             )
+
+        app_info = job_applications.get(chat_id)
+        if app_info:
+            candidate_name = app_info["name"]
+            candidate_age = app_info["age"]
+            candidate_phone = app_info["phone"]
+        else:
+            candidate_age = "не указан"
+            candidate_phone = "не указан"
+
+        # Новый отклик: Авито создаёт чат с системным сообщением
+        # ("Кандидат откликнулся..."), а сам кандидат ещё ничего не написал.
+        # Пишем ему первыми и сразу уведомляем MAX о новом отклике.
+        if msg_type == "system":
+            if chat_id not in initiated_chats:
+                initiated_chats.add(chat_id)
+                print(f"[FIRST CONTACT] Новый отклик в чате {chat_id}, пишем кандидату первыми", flush=True)
+                send_avito_reply(token, user_id, chat_id, OPENING_MESSAGE)
+                send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, "Подумать", chat_id)
+            continue
+
+        if not msg_id or msg_id in processed_messages:
+            continue
+
+        if str(author_id) == str(user_id):
+            continue
+
+        content_obj = last_msg_obj.get("content")
+        if not content_obj:
+            continue
+
+        last_msg_text = content_obj.get("content", {}).get("text", "") or content_obj.get("text", "")
+        if not last_msg_text:
+            continue
+
+        processed_messages.add(msg_id)
+        initiated_chats.add(chat_id)
+
+        print(f"[PROCESSING] Обработка чата {chat_id}, загружаем историю...", flush=True)
 
         chat_history = get_chat_history(token, user_id, chat_id)
         if not chat_history:
