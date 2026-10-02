@@ -277,13 +277,13 @@ def get_job_applications_map(token, days=30):
             if res.status_code != 200:
                 print(f"[ОШИБКА ПОЛУЧЕНИЯ ОТКЛИКОВ]: Код {res.status_code} - {res.text}", flush=True)
                 break
-            batch = res.json().get("applies", [])
+            batch = res.json().get("applies") or []
             if not batch:
                 break
-            ids.extend([item["id"] for item in batch])
+            ids.extend([(item or {}).get("id") for item in batch if (item or {}).get("id")])
             if len(batch) < 100:
                 break
-            cursor = batch[-1]["id"]
+            cursor = (batch[-1] or {}).get("id")
     except Exception as e:
         print(f"[ОШИБКА ПОЛУЧЕНИЯ ОТКЛИКОВ EXCEPTION]: {e}", flush=True)
         return {}
@@ -300,14 +300,19 @@ def get_job_applications_map(token, days=30):
             if res.status_code != 200:
                 print(f"[ОШИБКА ДЕТАЛЕЙ ОТКЛИКОВ]: Код {res.status_code} - {res.text}", flush=True)
                 continue
-            for item in res.json().get("applies", []):
-                chat_value = item.get("contacts", {}).get("chat", {}).get("value")
+            for item in (res.json().get("applies") or []):
+                item = item or {}
+                contacts = item.get("contacts") or {}
+                chat_value = (contacts.get("chat") or {}).get("value")
                 if not chat_value:
                     continue
-                name = item.get("applicant", {}).get("data", {}).get("name") or "Имя не указано"
-                age = item.get("enriched_properties", {}).get("age", {}).get("value")
-                phones = item.get("contacts", {}).get("phones", [])
-                phone = phones[0].get("value") if phones else None
+                applicant_data = (item.get("applicant") or {}).get("data") or {}
+                name = applicant_data.get("name") or "Имя не указано"
+                age_obj = (item.get("enriched_properties") or {}).get("age") or {}
+                age = age_obj.get("value")
+                phones = contacts.get("phones") or []
+                first_phone = (phones[0] or {}) if phones else {}
+                phone = first_phone.get("value")
                 result[chat_value] = {
                     "name": name,
                     "age": str(age) if age else "не указан",
