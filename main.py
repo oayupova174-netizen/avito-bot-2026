@@ -323,10 +323,12 @@ def get_job_applications_map(token, days=30):
                 phones = contacts.get("phones") or []
                 first_phone = (phones[0] or {}) if phones else {}
                 phone = first_phone.get("value")
+                state = item.get("state") or "new"
                 result[chat_value] = {
                     "name": name,
                     "age": str(age) if age else "не указан",
-                    "phone": phone if phone else "не указан"
+                    "phone": phone if phone else "не указан",
+                    "state": state
                 }
         except Exception as e:
             print(f"[ОШИБКА ДЕТАЛЕЙ ОТКЛИКОВ EXCEPTION]: {e}", flush=True)
@@ -382,9 +384,18 @@ def check_and_process():
             candidate_name = app_info["name"]
             candidate_age = app_info["age"]
             candidate_phone = app_info["phone"]
+            funnel_state = app_info.get("state", "new")
         else:
             candidate_age = "не указан"
             candidate_phone = "не указан"
+            funnel_state = "new"
+
+        # Кандидата уже закрыли вручную в воронке Авито (отказ/архив/приглашён) —
+        # бот не должен больше писать ему или вмешиваться.
+        if funnel_state in ("rejected", "archive", "selected"):
+            processed_messages.add(msg_id) if msg_id else None
+            initiated_chats.add(chat_id)
+            continue
 
         # Новый отклик: Авито создаёт чат с системным сообщением
         # ("Кандидат откликнулся..."), а сам кандидат ещё ничего не написал.
