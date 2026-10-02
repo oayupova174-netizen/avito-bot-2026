@@ -413,6 +413,17 @@ def check_and_process():
         if str(author_id) == str(user_id):
             continue
 
+        # ВАЖНО: после перезапуска бота (деплой, пробуждение Render) эти наборы
+        # обнуляются, и без проверки времени бот бросится отвечать разом на ВСЕ
+        # старые диалоги, где последним писал кандидат. Отвечаем только на то,
+        # что пришло недавно.
+        msg_created = last_msg_obj.get("created", 0) or 0
+        age_seconds = time.time() - msg_created
+        if age_seconds > 900:  # 15 минут
+            processed_messages.add(msg_id)
+            initiated_chats.add(chat_id)
+            continue
+
         content_obj = last_msg_obj.get("content")
         if not content_obj:
             continue
