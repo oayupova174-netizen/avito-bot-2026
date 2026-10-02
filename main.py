@@ -342,23 +342,34 @@ def check_and_process():
     chats = res.json().get("chats", [])
     job_applications = get_job_applications_map(token)
 
+    print(f"[DEBUG CHATS]: всего чатов получено: {len(chats)}", flush=True)
+
     for chat in chats:
         chat_id = chat.get("id")
         last_msg_obj = chat.get("last_message")
-        
+
         if not last_msg_obj:
+            print(f"[DEBUG CHAT {chat_id}]: нет last_message, пропуск", flush=True)
             continue
-            
+
         msg_id = last_msg_obj.get("id")
         author_id = last_msg_obj.get("author_id")
         msg_type = last_msg_obj.get("type")
+        already_processed = msg_id in processed_messages
+
+        print(
+            f"[DEBUG CHAT {chat_id}]: msg_id={msg_id}, author_id={author_id}, "
+            f"type={msg_type}, already_processed={already_processed}, "
+            f"is_own_user={str(author_id) == str(user_id)}",
+            flush=True
+        )
 
         if msg_type == "system":
             continue
 
         if not msg_id or msg_id in processed_messages:
             continue
-            
+
         if str(author_id) == str(user_id):
             continue
             
