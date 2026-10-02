@@ -365,6 +365,7 @@ def check_and_process():
         )
 
         if msg_type == "system":
+            print(f"[DEBUG SYSTEM CONTENT {chat_id}]: {json.dumps(last_msg_obj, ensure_ascii=False)[:500]}", flush=True)
             continue
 
         if not msg_id or msg_id in processed_messages:
