@@ -448,9 +448,13 @@ def check_and_process():
             send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, status, chat_id)
 
 if __name__ == "__main__":
+    from datetime import datetime, timezone, timedelta
+
     threading.Thread(target=run_server, daemon=True).start()
     print("[INIT] Бот запущен и готов отвечать на сообщения...", flush=True)
     while True:
+        now_msk = datetime.now(timezone.utc) + timedelta(hours=3)
+        print(f"[HEARTBEAT] Цикл проверки, время (МСК): {now_msk.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
         try:
             check_and_process()
         except Exception as e:
