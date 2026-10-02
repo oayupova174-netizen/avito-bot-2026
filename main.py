@@ -273,7 +273,6 @@ def get_job_applications_map(token, days=30):
                 "https://api.avito.ru/job/v1/applications/get_ids",
                 headers=headers, params=params, timeout=10
             )
-            print(f"[DEBUG GET_IDS]: Код {res.status_code}, тело: {res.text[:500]}", flush=True)
             if res.status_code != 200:
                 print(f"[ОШИБКА ПОЛУЧЕНИЯ ОТКЛИКОВ]: Код {res.status_code} - {res.text}", flush=True)
                 break
@@ -342,8 +341,7 @@ def check_and_process():
 
     chats = res.json().get("chats", [])
     job_applications = get_job_applications_map(token)
-    print(f"[DEBUG APPLICATIONS]: найдено {len(job_applications)} сопоставленных откликов, ключи: {list(job_applications.keys())[:5]}", flush=True)
-    
+
     for chat in chats:
         chat_id = chat.get("id")
         last_msg_obj = chat.get("last_message")
