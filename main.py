@@ -135,12 +135,22 @@ def get_chat_history(token, user_id, chat_id):
         print(f"[ОШИБКА ИСТОРИИ ЧАТА]: {e}", flush=True)
     return []
 
-def generate_ai_reply(chat_history):
-    system_prompt = """
+def generate_ai_reply(chat_history, vacancy_title="Менеджер по продажам", vacancy_city="не указан",
+                       vacancy_address="не указан", vacancy_salary="не указана", vacancy_schedule="не указан"):
+    system_prompt = f"""
     Ты — реальный рекрутер юридической компании. Общаешься в чате Авито как живой человек: просто, вежливо, без роботоподобных фраз.
 
     ГЛАВНАЯ ЦЕЛЬ БОТА:
     Быстро проверить кандидата, получить согласие на созвон и завершить диалог фразой о том, что HR-менеджер скоро позвонит.
+
+    ЭТО КОНКРЕТНАЯ ВАКАНСИЯ, ПО КОТОРОЙ ИДЁТ ДИАЛОГ (бери данные о городе/адресе/зарплате/графике ТОЛЬКО отсюда, это реальные данные из карточки объявления на Авито):
+    - Название вакансии: {vacancy_title}
+    - Город/регион вакансии: {vacancy_city}
+    - Адрес офиса: {vacancy_address}
+    - Зарплата по этой вакансии: {vacancy_salary}
+    - График по этой вакансии: {vacancy_schedule}
+
+    У компании много вакансий в разных городах, с разными условиями. НИКОГДА не называй кандидату другой город, адрес, зарплату или график, кроме указанных выше — даже если тебе кажется, что "обычно" бывает иначе. Если какое-то поле выше указано как "не указан(а)", а кандидат про это спрашивает — не придумывай значение, а напиши, что уточнишь это у HR-менеджера при созвоне.
 
     ПЕРЕД ТЕМ КАК ОТВЕЧАТЬ, ОБЯЗАТЕЛЬНО СДЕЛАЙ ПРО СЕБЯ СЛЕДУЮЩЕЕ (не пиши это в ответе):
     1. Перечитай ВЕСЬ диалог с самого начала, а не только последнее сообщение.
@@ -148,10 +158,6 @@ def generate_ai_reply(chat_history):
     3. Определи, о чём именно последнее сообщение кандидата — это ответ на твой вопрос, новый вопрос от него, отказ, или что-то не по теме вакансии.
     4. Не повторяй вопросы, на которые кандидат уже ответил ранее в этом же диалоге. Не проси данные повторно.
     5. Если сообщение кандидата непонятное, бессвязное или не по теме — не выдумывай факты и не отвечай наугад: вежливо переспроси именно то, что осталось непонятным.
-
-    Условия вакансии (менеджер по продажам):
-    - График: 5/2.
-    - Зарплата: оклад + процент за каждый договор (в среднем от 60 000 рублей).
 
     Требования:
     - Возраст: от 25 до 45 лет.
@@ -209,11 +215,12 @@ def generate_ai_reply(chat_history):
         print(f"[ОШИБКА CLAUDE EXCEPTION]: {e}", flush=True)
         return {"reply_text": "", "status": "Подумать", "reason": "Сбой генерации"}
 
-OPENING_MESSAGE = (
-    "Добрый день! Меня зовут Полина, я рекрутер. Увидела ваш отклик на вакансию "
-    "«Менеджер по продажам». Подскажите, пожалуйста, сколько вам лет и был ли у вас "
-    "опыт работы в продажах — если да, то сколько по времени?"
-)
+def build_opening_message(vacancy_title="Менеджер по продажам"):
+    return (
+        f"Добрый день! Меня зовут Полина, я рекрутер. Увидела ваш отклик на вакансию "
+        f"«{vacancy_title}». Подскажите, пожалуйста, сколько вам лет и был ли у вас "
+        f"опыт работы в продажах — если да, то сколько по времени?"
+    )
 
 def send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, status, chat_id):
     if not MAX_CHAT_ID:
@@ -324,16 +331,68 @@ def get_job_applications_map(token, days=30):
                 first_phone = (phones[0] or {}) if phones else {}
                 phone = first_phone.get("value")
                 state = item.get("state") or "new"
+                vacancy_id = item.get("vacancy_id")
                 result[chat_value] = {
                     "name": name,
                     "age": str(age) if age else "не указан",
                     "phone": phone if phone else "не указан",
-                    "state": state
+                    "state": state,
+                    "vacancy_id": vacancy_id
                 }
         except Exception as e:
             print(f"[ОШИБКА ДЕТАЛЕЙ ОТКЛИКОВ EXCEPTION]: {e}", flush=True)
 
     return result
+
+vacancy_cache = {}  # vacancy_id -> {title, city, address, salary_text, schedule}
+vacancy_cache_time = {}  # vacancy_id -> время последнего обновления
+
+def get_vacancy_info(token, vacancy_id):
+    """Получает реальную карточку вакансии (название, город, адрес, зарплату, график)
+    по её vacancy_id — чтобы бот отвечал про ТУ вакансию, на которую откликнулся
+    конкретный кандидат, а не придумывал город/офис."""
+    if not vacancy_id:
+        return None
+
+    cached_at = vacancy_cache_time.get(vacancy_id, 0)
+    if vacancy_id in vacancy_cache and (time.time() - cached_at) < 3600:  # кэш на 1 час
+        return vacancy_cache[vacancy_id]
+
+    url = f"https://api.avito.ru/job/v2/vacancies/{vacancy_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code != 200:
+            print(f"[ОШИБКА КАРТОЧКИ ВАКАНСИИ {vacancy_id}]: Код {res.status_code} - {res.text}", flush=True)
+            return vacancy_cache.get(vacancy_id)
+
+        data = res.json() or {}
+        address_details = data.get("addressDetails") or {}
+        params = data.get("params") or {}
+        salary_range = params.get("salary") or {}
+
+        salary_text = "не указана"
+        if salary_range.get("from") or salary_range.get("to"):
+            parts = []
+            if salary_range.get("from"):
+                parts.append(f"от {salary_range['from']}")
+            if salary_range.get("to"):
+                parts.append(f"до {salary_range['to']}")
+            salary_text = " ".join(parts) + " руб."
+
+        info = {
+            "title": data.get("title") or "Менеджер по продажам",
+            "city": address_details.get("city") or "не указан",
+            "address": address_details.get("address") or "не указан",
+            "salary_text": salary_text,
+            "schedule": params.get("schedule") or "не указан",
+        }
+        vacancy_cache[vacancy_id] = info
+        vacancy_cache_time[vacancy_id] = time.time()
+        return info
+    except Exception as e:
+        print(f"[ОШИБКА КАРТОЧКИ ВАКАНСИИ EXCEPTION {vacancy_id}]: {e}", flush=True)
+        return vacancy_cache.get(vacancy_id)
 
 def check_and_process():
     token = get_avito_token()
@@ -373,11 +432,14 @@ def check_and_process():
                 break
 
         candidate_city = "Город не указан"
+        vacancy_title = "Менеджер по продажам"
         context = chat.get("context") or {}
         if context.get("type") == "item":
+            ctx_value = context.get("value") or {}
             candidate_city = (
-                context.get("value", {}).get("location", {}).get("title", candidate_city)
+                (ctx_value.get("location") or {}).get("title", candidate_city)
             )
+            vacancy_title = ctx_value.get("title") or vacancy_title
 
         app_info = job_applications.get(chat_id)
         if app_info:
@@ -389,6 +451,21 @@ def check_and_process():
             candidate_age = "не указан"
             candidate_phone = "не указан"
             funnel_state = "new"
+
+        # Подтягиваем реальную карточку вакансии (адрес, зарплату, график) —
+        # это надёжнее, чем просто название из текста чата.
+        vacancy_city = candidate_city
+        vacancy_address = "не указан"
+        vacancy_salary = "оклад + процент за каждый договор (в среднем от 60 000 рублей)"
+        vacancy_schedule = "5/2"
+        if app_info and app_info.get("vacancy_id"):
+            v_info = get_vacancy_info(token, app_info["vacancy_id"])
+            if v_info:
+                vacancy_title = v_info["title"]
+                vacancy_city = v_info["city"]
+                vacancy_address = v_info["address"]
+                vacancy_salary = v_info["salary_text"]
+                vacancy_schedule = v_info["schedule"]
 
         # Кандидата уже закрыли вручную в воронке Авито (отказ/архив/приглашён) —
         # бот не должен больше писать ему или вмешиваться.
@@ -410,7 +487,7 @@ def check_and_process():
             if chat_id not in initiated_chats and is_recent:
                 initiated_chats.add(chat_id)
                 print(f"[FIRST CONTACT] Новый отклик в чате {chat_id}, пишем кандидату первыми", flush=True)
-                send_avito_reply(token, user_id, chat_id, OPENING_MESSAGE)
+                send_avito_reply(token, user_id, chat_id, build_opening_message(vacancy_title))
                 send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, "Подумать", chat_id)
             else:
                 # старое системное сообщение (или уже обработанное) — просто запоминаем чат,
@@ -452,7 +529,10 @@ def check_and_process():
         if not chat_history:
             chat_history = [{"role": "user", "content": last_msg_text}]
 
-        ai_data = generate_ai_reply(chat_history)
+        ai_data = generate_ai_reply(
+            chat_history, vacancy_title, vacancy_city,
+            vacancy_address, vacancy_salary, vacancy_schedule
+        )
         reply_text = ai_data.get("reply_text", "")
         status = ai_data.get("status", "Подумать")
 
