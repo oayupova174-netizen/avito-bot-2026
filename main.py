@@ -52,6 +52,12 @@ processed_messages = set()
 initiated_chats = set()
 notified_final_chats = set()  # чаты, по которым уже отправлено финальное уведомление (Подходит/Не подходит)
 
+# Вопросы, которые бот задал коллегам в MAX и ждёт ответа реплаем.
+# ВАЖНО: как и остальные наборы в памяти, обнуляется при перезапуске —
+# если вопрос "завис" без ответа дольше суток, можно считать его потерянным.
+pending_human_questions = {}  # mid сообщения в MAX -> {"chat_id": ..., "created": время}
+max_updates_marker = None  # отметка, с какого места читать новые сообщения в MAX
+
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/max_updates"):
@@ -201,6 +207,10 @@ def generate_ai_reply(chat_history, vacancy_title="Менеджер по про�
     Такой ответ — это и есть переход к ШАГУ 3 (согласование созвона), даже если возраст и опыт ещё не до конца
     выяснены: веди диалог к созвону, а не завершай его отказом.
 
+    ЕСЛИ КАНДИДАТ СПРАШИВАЕТ ЧТО-ТО, НА ЧТО У ТЕБЯ ДЕЙСТВИТЕЛЬНО НЕТ ОТВЕТА в этих инструкциях (не про город/адрес/зарплату/график/оформление — это уже описано выше, а что-то другое, специфичное: например, про конкретные условия, которых здесь не указано, или вопрос, требующий решения руководителя) —
+    НЕ выдумывай ответ и НЕ отказывай наугад. Вместо этого верни "needs_human": true и коротко сформулируй суть вопроса в поле "human_question" (от третьего лица, для коллеги-рекрутера, например: "Кандидат спрашивает про [...]. Что ответить?"). В "reply_text" в этом случае можно оставить пустую строку или короткую фразу-паузу вроде "Секунду, уточню этот момент и вернусь с ответом!" — финальное решение по диалогу (статус) в этом случае НЕ принимай, ставь "Подумать".
+    Используй это ТОЛЬКО когда реально не знаешь ответа из инструкций — не для обычных уточняющих вопросов о возрасте/опыте, и не для вопросов, которые уже покрыты правилами выше (оформление, город, зарплата).
+
     Другие правила:
     1. Статус «Подумать» ставь ТОЛЬКО пока диалог ещё идёт по шагам 1-3 и окончательного решения ещё нет — это промежуточное состояние, а не финал.
     2. Если кандидат НЕ подходит по возрасту, опыту или другим формальным критериям — это КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО, которое нельзя нарушать ни при каких условиях:
@@ -215,7 +225,9 @@ def generate_ai_reply(chat_history, vacancy_title="Менеджер по про�
         "status": "Подходит" или "Подумать" или "Не подходит",
         "age": "Возраст кандидата числом, если он называл его где-либо в диалоге, иначе строка «не указан»",
         "phone": "Номер телефона кандидата, если он называл его где-либо в диалоге, иначе строка «не указан»",
-        "reason": "Краткая суть ответа или статус"
+        "reason": "Краткая суть ответа или статус",
+        "needs_human": true или false — true, только если нужно передать вопрос коллегам в MAX (см. правило выше),
+        "human_question": "Суть вопроса кандидата для коллеги-рекрутера, если needs_human true, иначе пустая строка"
     }
     """
     url = "https://api.anthropic.com/v1/messages"
@@ -307,6 +319,103 @@ def send_max_notification(candidate_name, candidate_city, candidate_age, candida
             print("[MAX SUCCESS] Уведомление отправлено в чат MAX", flush=True)
     except Exception as e:
         print(f"[ОШИБКА MAX EXCEPTION]: {e}", flush=True)
+
+def init_max_updates_marker():
+    """Вызывается один раз при старте бота: запоминает текущую позицию в ленте
+    сообщений MAX, чтобы после перезапуска бот не пытался разобрать как "ответы"
+    старые сообщения, которые накопились в чате до этого момента."""
+    global max_updates_marker
+    try:
+        res = requests.get(
+            "https://platform-api2.max.ru/updates",
+            headers={"Authorization": MAX_BOT_TOKEN},
+            params={"limit": 50},
+            timeout=10,
+            verify=get_max_ca_bundle()
+        )
+        if res.status_code == 200:
+            marker = (res.json() or {}).get("marker")
+            if marker is not None:
+                max_updates_marker = marker
+                print(f"[MAX] Начальная отметка обновлений установлена: {marker}", flush=True)
+        else:
+            print(f"[ОШИБКА MAX MARKER INIT]: Код {res.status_code} - {res.text}", flush=True)
+    except Exception as e:
+        print(f"[ОШИБКА MAX MARKER INIT EXCEPTION]: {e}", flush=True)
+
+def send_max_question(text):
+    """Отправляет вопрос коллегам в MAX и возвращает id сообщения (mid),
+    чтобы потом можно было узнать реплай именно на этот вопрос."""
+    if not MAX_CHAT_ID:
+        print("[ОШИБКА MAX]: не задана переменная MAX_CHAT_ID", flush=True)
+        return None
+
+    url = f"https://platform-api2.max.ru/messages?chat_id={MAX_CHAT_ID}"
+    headers = {"Authorization": MAX_BOT_TOKEN, "Content-Type": "application/json"}
+    try:
+        res = requests.post(
+            url, headers=headers, json={"text": text},
+            timeout=10, verify=get_max_ca_bundle()
+        )
+        if res.status_code != 200:
+            print(f"[ОШИБКА MAX ВОПРОС]: Код {res.status_code} - {res.text}", flush=True)
+            return None
+        data = res.json() or {}
+        mid = (data.get("body") or {}).get("mid") or data.get("mid")
+        print(f"[MAX ВОПРОС ОТПРАВЛЕН] mid={mid}", flush=True)
+        return mid
+    except Exception as e:
+        print(f"[ОШИБКА MAX ВОПРОС EXCEPTION]: {e}", flush=True)
+        return None
+
+def process_max_replies(token, user_id):
+    """Проверяет, не ответили ли коллеги в MAX реплаем на один из ожидающих
+    вопросов бота, и если да — пересылает их ответ кандидату в Авито."""
+    global max_updates_marker
+
+    if not pending_human_questions:
+        return  # нечего ждать — не дёргаем MAX API лишний раз
+
+    url = "https://platform-api2.max.ru/updates"
+    headers = {"Authorization": MAX_BOT_TOKEN}
+    params = {"limit": 50}
+    if max_updates_marker is not None:
+        params["marker"] = max_updates_marker
+
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=10, verify=get_max_ca_bundle())
+        if res.status_code != 200:
+            print(f"[ОШИБКА MAX UPDATES]: Код {res.status_code} - {res.text}", flush=True)
+            return
+
+        data = res.json() or {}
+        updates = data.get("updates") or []
+        new_marker = data.get("marker")
+        if new_marker is not None:
+            max_updates_marker = new_marker
+
+        for upd in updates:
+            if upd.get("update_type") != "message_created":
+                continue
+            msg = upd.get("message") or {}
+            link = msg.get("link") or {}
+            if link.get("type") != "reply":
+                continue  # интересуют только реплаи на конкретное сообщение бота
+
+            replied_to_mid = link.get("mid")
+            pending = pending_human_questions.pop(replied_to_mid, None)
+            if not pending:
+                continue  # реплай на какое-то другое сообщение, не наш вопрос
+
+            answer_text = ((msg.get("body") or {}).get("text") or "").strip()
+            if not answer_text:
+                continue
+
+            chat_id = pending["chat_id"]
+            print(f"[MAX ОТВЕТ ПОЛУЧЕН] Чат {chat_id}: {answer_text}", flush=True)
+            send_avito_reply(token, user_id, chat_id, answer_text)
+    except Exception as e:
+        print(f"[ОШИБКА MAX UPDATES EXCEPTION]: {e}", flush=True)
 
 def send_avito_reply(token, user_id, chat_id, text):
     if not text or text.strip() == "":
@@ -513,6 +622,10 @@ def check_and_process():
     chats = res.json().get("chats", [])
     job_applications = get_job_applications_map(token)
 
+    # Сначала проверяем, не ответили ли коллеги в MAX на ранее заданные вопросы —
+    # если да, сразу пересылаем ответ кандидату, не дожидаясь следующего цикла.
+    process_max_replies(token, user_id)
+
     for chat in chats:
         chat_id = chat.get("id")
         last_msg_obj = chat.get("last_message")
@@ -660,6 +773,8 @@ def check_and_process():
         )
         reply_text = ai_data.get("reply_text", "")
         status = ai_data.get("status", "Подумать")
+        needs_human = ai_data.get("needs_human", False)
+        human_question = (ai_data.get("human_question") or "").strip()
 
         if app_info:
             candidate_name = app_info["name"]
@@ -670,7 +785,21 @@ def check_and_process():
         if candidate_age == "не указан":
             candidate_age = ai_data.get("age", "не указан")
 
-        if reply_text:
+        if needs_human and human_question:
+            # ИИ не знает ответа — кандидату отправляем паузу, а вопрос уходит коллегам
+            # в MAX. Как только кто-то ответит реплаем, process_max_replies() перешлёт
+            # ответ кандидату на одном из следующих циклов.
+            holding_text = reply_text.strip() if reply_text.strip() else "Секунду, уточню этот момент и вернусь с ответом!"
+            send_avito_reply(token, user_id, chat_id, holding_text)
+            question_text = (
+                f"❓ Вопрос от кандидата {candidate_name} (чат: https://avito.ru/profile/messenger/channel/{chat_id}):\n"
+                f"{human_question}\n\n"
+                f"Ответьте на ЭТО сообщение реплаем — я передам ваш ответ кандидату."
+            )
+            mid = send_max_question(question_text)
+            if mid:
+                pending_human_questions[mid] = {"chat_id": chat_id, "created": time.time()}
+        elif reply_text:
             send_avito_reply(token, user_id, chat_id, reply_text)
             # В MAX шлём уведомление только когда по кандидату есть окончательное решение
             # (подходит / не подходит), и только один раз на чат — чтобы не дублировать
@@ -684,6 +813,7 @@ if __name__ == "__main__":
     from datetime import datetime, timezone, timedelta
 
     threading.Thread(target=run_server, daemon=True).start()
+    init_max_updates_marker()
     print("[INIT] Бот запущен и готов отвечать на сообщения...", flush=True)
     while True:
         now_msk = datetime.now(timezone.utc) + timedelta(hours=3)
