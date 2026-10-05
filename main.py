@@ -191,6 +191,16 @@ def generate_ai_reply(chat_history, vacancy_title="Менеджер по про�
 
     Если сообщение кандидата уводит разговор в сторону (не по теме, посторонний вопрос) — коротко ответь по существу, но затем верни разговор к текущему шагу сценария, а не бросай сценарий.
 
+    Если кандидат спрашивает про неофициальное трудоустройство, "серую" зарплату, работу без оформления или
+    любые альтернативные варианты оформления (например, объясняет это тем, что у него удержания/долги/ФССП
+    списывает часть зарплаты) — НЕ отвечай категоричным отказом вида "нет, только официально". Оформление у
+    компании официальное, но вопросы конкретных условий — это компетенция руководителя, а не твоя. Ответь
+    мягко, не отрицая и не обещая: это стоит обсудить с руководителем на собеседовании, и предложи передать
+    его HR-менеджеру для созвона, например: «Это лучше обсудить с руководителем лично на собеседовании — он
+    расскажет подробнее про варианты. Передам ваш номер HR-менеджеру, он вам позвонит, обсудите это с ним?».
+    Такой ответ — это и есть переход к ШАГУ 3 (согласование созвона), даже если возраст и опыт ещё не до конца
+    выяснены: веди диалог к созвону, а не завершай его отказом.
+
     Другие правила:
     1. Статус «Подумать» ставь ТОЛЬКО пока диалог ещё идёт по шагам 1-3 и окончательного решения ещё нет — это промежуточное состояние, а не финал.
     2. Если кандидат НЕ подходит по возрасту, опыту или другим формальным критериям — это КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО, которое нельзя нарушать ни при каких условиях:
@@ -245,6 +255,21 @@ def build_opening_message(vacancy_title="Менеджер по продажам"
         f"«{vacancy_title}». Подскажите, пожалуйста, сколько вам лет и был ли у вас "
         f"опыт работы в продажах — если да, то сколько по времени?"
     )
+
+NEUTRAL_REJECTION_MESSAGE = (
+    "Спасибо за отклик! На данный момент, к сожалению, не сможем предложить вам эту позицию. "
+    "Удачи в поиске работы!"
+)
+
+def known_age_fails_requirements(age_value):
+    """Если возраст кандидата уже известен ДО начала переписки (из отклика или резюме)
+    и заведомо не входит в требуемый диапазон 25-45 — не тратим время кандидата
+    и рекрутёра на вопросы, а сразу вежливо (нейтрально, без причины) отказываем."""
+    try:
+        age_int = int(str(age_value).strip())
+    except (TypeError, ValueError):
+        return False
+    return age_int < 25 or age_int > 45
 
 def send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, status, chat_id):
     if not MAX_CHAT_ID:
@@ -574,9 +599,20 @@ def check_and_process():
 
             if chat_id not in initiated_chats and is_recent:
                 initiated_chats.add(chat_id)
-                print(f"[FIRST CONTACT] Новый отклик в чате {chat_id}, пишем кандидату первыми", flush=True)
-                send_avito_reply(token, user_id, chat_id, build_opening_message(vacancy_title))
-                send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, "Подумать", chat_id)
+
+                # Возраст уже известен из отклика/резюме ДО начала переписки — если он
+                # заведомо не подходит (не 25-45), сразу нейтрально отказываем, не задавая
+                # вопросов и не показывая кандидату настоящую причину.
+                known_age = resume_age if resume_age else (candidate_age if candidate_age != "не указан" else None)
+                if known_age is not None and known_age_fails_requirements(known_age):
+                    print(f"[AUTO-ОТКАЗ] Чат {chat_id}: возраст {known_age} не входит в 25-45, отказываем без переписки", flush=True)
+                    send_avito_reply(token, user_id, chat_id, NEUTRAL_REJECTION_MESSAGE)
+                    notified_final_chats.add(chat_id)
+                    send_max_notification(candidate_name, candidate_city, known_age, candidate_phone, "Не подходит", chat_id)
+                else:
+                    print(f"[FIRST CONTACT] Новый отклик в чате {chat_id}, пишем кандидату первыми", flush=True)
+                    send_avito_reply(token, user_id, chat_id, build_opening_message(vacancy_title))
+                    send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, "Подумать", chat_id)
             else:
                 # старое системное сообщение (или уже обработанное) — просто запоминаем чат,
                 # чтобы не возвращаться к нему снова
