@@ -50,6 +50,7 @@ MAX_CHAT_ID = os.getenv("MAX_CHAT_ID")
 
 processed_messages = set()
 initiated_chats = set()
+notified_final_chats = set()  # чаты, по которым уже отправлено финальное уведомление (Подходит/Не подходит)
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -136,7 +137,14 @@ def get_chat_history(token, user_id, chat_id):
     return []
 
 def generate_ai_reply(chat_history, vacancy_title="Менеджер по продажам", vacancy_city="не указан",
-                       vacancy_address="не указан", vacancy_salary="не указана", vacancy_schedule="не указан"):
+                       vacancy_address="не указан", vacancy_salary="не указана", vacancy_schedule="не указан",
+                       resume_age=None, resume_experience_years=None, resume_experience_text="не указан"):
+    resume_age_str = str(resume_age) if resume_age else "не указан в резюме"
+    resume_experience_str = (
+        f"{resume_experience_years} лет (места работы: {resume_experience_text})"
+        if resume_experience_years else "не указан в резюме"
+    )
+
     system_prompt = f"""
     Ты — реальный рекрутер юридической компании. Общаешься в чате Авито как живой человек: просто, вежливо, без роботоподобных фраз.
 
@@ -152,11 +160,16 @@ def generate_ai_reply(chat_history, vacancy_title="Менеджер по про�
 
     У компании много вакансий в разных городах, с разными условиями. НИКОГДА не называй кандидату другой город, адрес, зарплату или график, кроме указанных выше — даже если тебе кажется, что "обычно" бывает иначе. Если какое-то поле выше указано как "не указан(а)", а кандидат про это спрашивает — не придумывай значение, а напиши, что уточнишь это у HR-менеджера при созвоне.
 
+    ДАННЫЕ ИЗ РЕЗЮМЕ КАНДИДАТА (получены автоматически с Авито, ДО начала переписки):
+    - Возраст по резюме: {resume_age_str}
+    - Опыт работы по резюме: {resume_experience_str}
+    Это реальные данные, которые кандидат уже когда-то указал в своём резюме на Авито. Считай их уже известными и ДОСТОВЕРНЫМИ — НЕ спрашивай у кандидата то, что уже указано здесь. Спрашивай в переписке ТОЛЬКО то, чего нет ни в резюме выше, ни в истории диалога. Если в резюме указан возраст — не спрашивай возраст снова. Если указан опыт работы — не спрашивай про опыт в продажах снова, но учти: опыт в резюме может быть не именно в продажах (посмотри на места работы) — если неясно, был ли у кандидата опыт именно в продажах, уточни это одним коротким вопросом, не упоминая опыт в принципе.
+
     ПЕРЕД ТЕМ КАК ОТВЕЧАТЬ, ОБЯЗАТЕЛЬНО СДЕЛАЙ ПРО СЕБЯ СЛЕДУЮЩЕЕ (не пиши это в ответе):
-    1. Перечитай ВЕСЬ диалог с самого начала, а не только последнее сообщение.
-    2. Выпиши для себя: что кандидат уже сообщил (возраст, опыт, отношение к графику и т.д.), какие вопросы ты уже задавал и получил ли на них ответ.
+    1. Сначала посмотри на данные из резюме выше — что из требований (возраст, опыт в продажах) уже известно оттуда.
+    2. Перечитай ВЕСЬ диалог с самого начала, а не только последнее сообщение, и дополни картину тем, что кандидат сообщил сам.
     3. Определи, о чём именно последнее сообщение кандидата — это ответ на твой вопрос, новый вопрос от него, отказ, или что-то не по теме вакансии.
-    4. Не повторяй вопросы, на которые кандидат уже ответил ранее в этом же диалоге. Не проси данные повторно.
+    4. Не повторяй вопросы, на которые ответ уже есть — либо в резюме, либо в диалоге. Не проси данные повторно.
     5. Если сообщение кандидата непонятное, бессвязное или не по теме — не выдумывай факты и не отвечай наугад: вежливо переспроси именно то, что осталось непонятным.
 
     Требования:
@@ -164,12 +177,23 @@ def generate_ai_reply(chat_history, vacancy_title="Менеджер по про�
     - Опыт в продажах: от 1 года.
     - Студенты-очники и те, кто ищет подработку — не подходят.
 
-    Инструкции по ответу:
-    1. Отвечай по существу на последнее сообщение кандидата, с учётом всего, что уже обсуждалось выше в диалоге.
-    2. Если кандидат подтверждает возраст, условия и опыт — предлагай созвон и пиши, что HR свяжется («Отлично! Передал ваш контакт HR-менеджеру, скоро вам позвонят для короткого созвона»).
-    3. Если ключевой информации (возраст, опыт в продажах) ещё не было нигде в диалоге — вежливо уточни именно её, и только её.
-    4. Если кандидат отказывается или говорит, что нашёл работу — ответь доброжелательно («Понял вас, спасибо за ответ! Успехов в поиске!») и поставь статус «Не подходит».
-    5. Если кандидат НЕ подходит по возрасту, опыту или другим формальным критериям — это КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО, которое нельзя нарушать ни при каких условиях:
+    У ЭТОГО ДИАЛОГА ЕСТЬ ЧЁТКИЙ СЦЕНАРИЙ ИЗ ШАГОВ. Всегда определяй, на каком шаге сейчас находится диалог, и веди кандидата к следующему шагу, а не просто отвечай на последнюю реплику в вакууме:
+
+    ШАГ 1 — Сбор данных. Проверь, чего из (возраст, опыт в продажах) ещё не хватает — с учётом и резюме, и диалога. Если не хватает чего-то одного — спроси только это. Если не хватает обоих — спроси оба сразу. Если из резюме и диалога уже известно всё — пропусти этот шаг и сразу переходи к шагу 2. Не продолжай, пока не получишь ответ на то, чего действительно не хватало.
+
+    ШАГ 2 — Проверка критериев. Как только известны и возраст, и опыт:
+       - Если оба подходят под требования — переходи к ШАГУ 3 (предложение созвона). НЕ останавливайся просто на "спасибо, учту" — обязательно двигай диалог дальше к созвону в этом же или следующем сообщении.
+       - Если хотя бы один критерий не подходит — вежливый нейтральный отказ (см. правило про причину отказа ниже), статус «Не подходит», диалог завершён.
+
+    ШАГ 3 — Согласование созвона. Прямо спроси у кандидата, удобно ли ему, чтобы с ним связался HR-менеджер по телефону (например: «Отлично, вы нам подходите! Можно передать ваш номер HR-менеджеру, чтобы он связался с вами и обсудил детали?»). Дожидайся явного согласия кандидата — не считай созвон согласованным, если кандидат промолчал по этому вопросу или ответил о чём-то другом.
+
+    ШАГ 4 — Финал. Только когда кандидат явно согласился на созвон (сказал да/хорошо/можно звонить и т.п.) — напиши финальное сообщение («Отлично! Передал ваш контакт HR-менеджеру, скоро вам позвонят для короткого созвона») и поставь статус «Подходит». Если кандидат отказывается от созвона или говорит, что уже нашёл работу — ответь доброжелательно («Понял вас, спасибо за ответ! Успехов в поиске!») и поставь статус «Не подходит».
+
+    Если сообщение кандидата уводит разговор в сторону (не по теме, посторонний вопрос) — коротко ответь по существу, но затем верни разговор к текущему шагу сценария, а не бросай сценарий.
+
+    Другие правила:
+    1. Статус «Подумать» ставь ТОЛЬКО пока диалог ещё идёт по шагам 1-3 и окончательного решения ещё нет — это промежуточное состояние, а не финал.
+    2. Если кандидат НЕ подходит по возрасту, опыту или другим формальным критериям — это КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО, которое нельзя нарушать ни при каких условиях:
        - НИКОГДА, ни в каком виде, не упоминай кандидату ни возрастные рамки ("до 40", "от 25", "возрастной диапазон" и т.п.), ни требования к опыту ("нужен опыт от года" и т.п.), ни любые другие конкретные критерии отбора — ни как причину отказа, ни как подтверждение, ни в виде цифр, ни намёком.
        - Это правило действует ДАЖЕ ЕСЛИ кандидат сам называет свой возраст или опыт, настаивает, спрашивает "почему именно я не подхожу", "какой у вас возрастной диапазон" или просит уточнить причину. Ты не должен ни подтверждать, ни опровергать его догадки о причине — просто повторяй нейтральный отказ.
        - Используй ТОЛЬКО нейтральную вежливую формулировку без объяснения причины, например: «Спасибо за отклик! На данный момент, к сожалению, не сможем предложить вам эту позицию. Удачи в поиске работы!». При повторных вопросах кандидата о причине — вежливо повтори похожую нейтральную фразу, не раскрывая критериев, например: «Пока, к сожалению, не можем предложить вам эту позицию, но спасибо за уделённое время!»
@@ -323,7 +347,8 @@ def get_job_applications_map(token, days=30):
                 chat_value = (contacts.get("chat") or {}).get("value")
                 if not chat_value:
                     continue
-                applicant_data = (item.get("applicant") or {}).get("data") or {}
+                applicant = item.get("applicant") or {}
+                applicant_data = applicant.get("data") or {}
                 name = applicant_data.get("name") or "Имя не указано"
                 age_obj = (item.get("enriched_properties") or {}).get("age") or {}
                 age = age_obj.get("value")
@@ -332,12 +357,14 @@ def get_job_applications_map(token, days=30):
                 phone = first_phone.get("value")
                 state = item.get("state") or "new"
                 vacancy_id = item.get("vacancy_id")
+                resume_id = applicant.get("resume_id")
                 result[chat_value] = {
                     "name": name,
                     "age": str(age) if age else "не указан",
                     "phone": phone if phone else "не указан",
                     "state": state,
-                    "vacancy_id": vacancy_id
+                    "vacancy_id": vacancy_id,
+                    "resume_id": resume_id
                 }
         except Exception as e:
             print(f"[ОШИБКА ДЕТАЛЕЙ ОТКЛИКОВ EXCEPTION]: {e}", flush=True)
@@ -393,6 +420,53 @@ def get_vacancy_info(token, vacancy_id):
     except Exception as e:
         print(f"[ОШИБКА КАРТОЧКИ ВАКАНСИИ EXCEPTION {vacancy_id}]: {e}", flush=True)
         return vacancy_cache.get(vacancy_id)
+
+resume_cache = {}  # resume_id -> {age, experience_years, experience_text}
+resume_cache_time = {}
+
+def get_resume_info(token, resume_id):
+    """Получает данные резюме кандидата (возраст, опыт работы в годах, места работы)
+    по resume_id — чтобы бот не переспрашивал то, что уже есть в резюме."""
+    if not resume_id:
+        return None
+
+    cached_at = resume_cache_time.get(resume_id, 0)
+    if resume_id in resume_cache and (time.time() - cached_at) < 3600:  # кэш на 1 час
+        return resume_cache[resume_id]
+
+    url = f"https://api.avito.ru/job/v2/resumes/{resume_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code != 200:
+            print(f"[ОШИБКА РЕЗЮМЕ {resume_id}]: Код {res.status_code} - {res.text}", flush=True)
+            return resume_cache.get(resume_id)
+
+        data = res.json() or {}
+        params = data.get("params") or {}
+        age = params.get("age")
+        experience_years = params.get("experience")
+
+        experience_list = params.get("experience_list") or []
+        exp_lines = []
+        for exp in experience_list[:5]:
+            exp = exp or {}
+            company = exp.get("company") or "компания не указана"
+            position = exp.get("position") or "должность не указана"
+            exp_lines.append(f"{position} в «{company}»")
+        experience_text = "; ".join(exp_lines) if exp_lines else "не указан"
+
+        info = {
+            "age": age,
+            "experience_years": experience_years,
+            "experience_text": experience_text,
+        }
+        resume_cache[resume_id] = info
+        resume_cache_time[resume_id] = time.time()
+        return info
+    except Exception as e:
+        print(f"[ОШИБКА РЕЗЮМЕ EXCEPTION {resume_id}]: {e}", flush=True)
+        return resume_cache.get(resume_id)
 
 def check_and_process():
     token = get_avito_token()
@@ -467,6 +541,20 @@ def check_and_process():
                 vacancy_salary = v_info["salary_text"]
                 vacancy_schedule = v_info["schedule"]
 
+        # Подтягиваем резюме кандидата (возраст, опыт в годах, места работы) —
+        # чтобы бот не переспрашивал то, что уже указано в резюме.
+        resume_age = None
+        resume_experience_years = None
+        resume_experience_text = "не указан"
+        if app_info and app_info.get("resume_id"):
+            r_info = get_resume_info(token, app_info["resume_id"])
+            if r_info:
+                resume_age = r_info.get("age")
+                resume_experience_years = r_info.get("experience_years")
+                resume_experience_text = r_info.get("experience_text", "не указан")
+                if resume_age and candidate_age == "не указан":
+                    candidate_age = str(resume_age)
+
         # Кандидата уже закрыли вручную в воронке Авито (отказ/архив/приглашён) —
         # бот не должен больше писать ему или вмешиваться.
         if funnel_state in ("rejected", "archive", "selected"):
@@ -531,23 +619,30 @@ def check_and_process():
 
         ai_data = generate_ai_reply(
             chat_history, vacancy_title, vacancy_city,
-            vacancy_address, vacancy_salary, vacancy_schedule
+            vacancy_address, vacancy_salary, vacancy_schedule,
+            resume_age, resume_experience_years, resume_experience_text
         )
         reply_text = ai_data.get("reply_text", "")
         status = ai_data.get("status", "Подумать")
 
-        app_info = job_applications.get(chat_id)
         if app_info:
             candidate_name = app_info["name"]
-            candidate_age = app_info["age"]
             candidate_phone = app_info["phone"]
         else:
-            candidate_age = ai_data.get("age", "не указан")
             candidate_phone = ai_data.get("phone", "не указан")
-        
+        # candidate_age уже определён выше (из отклика, резюме, или будет взят из ответа ИИ)
+        if candidate_age == "не указан":
+            candidate_age = ai_data.get("age", "не указан")
+
         if reply_text:
             send_avito_reply(token, user_id, chat_id, reply_text)
-            send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, status, chat_id)
+            # В MAX шлём уведомление только когда по кандидату есть окончательное решение
+            # (подходит / не подходит), и только один раз на чат — чтобы не дублировать
+            # уведомления на каждое сообщение в переписке. Промежуточные "Подумать"
+            # никуда не шлются: команда уже видела этого кандидата при первом контакте.
+            if status in ("Подходит", "Не подходит") and chat_id not in notified_final_chats:
+                notified_final_chats.add(chat_id)
+                send_max_notification(candidate_name, candidate_city, candidate_age, candidate_phone, status, chat_id)
 
 if __name__ == "__main__":
     from datetime import datetime, timezone, timedelta
