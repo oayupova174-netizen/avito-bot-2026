@@ -390,6 +390,11 @@ def process_max_replies(token, user_id):
     if not pending_human_questions:
         return  # нечего ждать — не дёргаем MAX API лишний раз
 
+    # Если отметка не была получена при старте (например, MAX API не ответил вовремя) —
+    # пробуем получить её сейчас, перед первой реальной проверкой ответов.
+    if max_updates_marker is None:
+        init_max_updates_marker()
+
     url = "https://platform-api2.max.ru/updates"
     headers = {"Authorization": MAX_BOT_TOKEN}
     params = {"limit": 50}
