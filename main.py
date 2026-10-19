@@ -98,7 +98,7 @@ def get_avito_token():
         "client_secret": AVITO_CLIENT_SECRET
     }
     try:
-        response = requests.post(url, data=payload, timeout=10)
+        response = requests.post(url, data=payload, timeout=30)
         if response.status_code == 200:
             return response.json().get("access_token")
         else:
@@ -111,7 +111,7 @@ def get_avito_user_id(token):
     url = "https://api.avito.ru/core/v1/accounts/self"
     headers = {"Authorization": f"Bearer {token}"}
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, headers=headers, timeout=30)
         if res.status_code == 200:
             return res.json().get("id")
         else:
@@ -125,7 +125,7 @@ def get_chat_history(token, user_id, chat_id):
     url = f"https://api.avito.ru/messenger/v1/accounts/{user_id}/chats/{chat_id}/messages?limit=20"
     headers = {"Authorization": f"Bearer {token}"}
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, headers=headers, timeout=30)
         if res.status_code == 200:
             messages_data = res.json().get("messages", [])
             messages_data = sorted(messages_data, key=lambda x: x.get("created", 0))
@@ -444,7 +444,7 @@ def send_avito_reply(token, user_id, chat_id, text):
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"message": {"text": text}, "type": "text"}
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
         if response.status_code != 200:
             print(f"[ОШИБКА ОТВЕТА АВИТО]: Код {response.status_code} - {response.text}", flush=True)
     except Exception as e:
@@ -466,7 +466,7 @@ def get_job_applications_map(token, days=30):
                 params["cursor"] = cursor
             res = requests.get(
                 "https://api.avito.ru/job/v1/applications/get_ids",
-                headers=headers, params=params, timeout=10
+                headers=headers, params=params, timeout=30
             )
             if res.status_code != 200:
                 print(f"[ОШИБКА ПОЛУЧЕНИЯ ОТКЛИКОВ]: Код {res.status_code} - {res.text}", flush=True)
@@ -489,7 +489,7 @@ def get_job_applications_map(token, days=30):
             res = requests.post(
                 "https://api.avito.ru/job/v1/applications/get_by_ids",
                 headers={**headers, "Content-Type": "application/json"},
-                json={"ids": batch_ids}, timeout=10
+                json={"ids": batch_ids}, timeout=30
             )
             if res.status_code != 200:
                 print(f"[ОШИБКА ДЕТАЛЕЙ ОТКЛИКОВ]: Код {res.status_code} - {res.text}", flush=True)
@@ -541,7 +541,7 @@ def get_vacancy_info(token, vacancy_id):
     url = f"https://api.avito.ru/job/v2/vacancies/{vacancy_id}"
     headers = {"Authorization": f"Bearer {token}"}
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, headers=headers, timeout=30)
         if res.status_code != 200:
             print(f"[ОШИБКА КАРТОЧКИ ВАКАНСИИ {vacancy_id}]: Код {res.status_code} - {res.text}", flush=True)
             return vacancy_cache.get(vacancy_id)
@@ -597,7 +597,7 @@ def get_resume_info(token, resume_id):
     url = f"https://api.avito.ru/job/v2/resumes/{resume_id}"
     headers = {"Authorization": f"Bearer {token}"}
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, headers=headers, timeout=30)
         if res.status_code != 200:
             print(f"[ОШИБКА РЕЗЮМЕ {resume_id}]: Код {res.status_code} - {res.text}", flush=True)
             return resume_cache.get(resume_id)
@@ -639,7 +639,7 @@ def check_and_process():
 
     url = f"https://api.avito.ru/messenger/v2/accounts/{user_id}/chats?limit=50&sort=-time"
     headers = {"Authorization": f"Bearer {token}"}
-    res = requests.get(url, headers=headers, timeout=10)
+    res = requests.get(url, headers=headers, timeout=30)
     
     if res.status_code != 200:
         print(f"[ОШИБКА ЗАПРОСА ЧАТОВ АВИТО]: Код {res.status_code}", flush=True)
