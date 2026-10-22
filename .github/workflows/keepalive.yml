@@ -1,0 +1,16 @@
+name: Keep Avito Bot Awake
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping bot to prevent Render free-tier sleep
+        run: |
+          curl -sS -o /dev/null -w "HTTP status: %{http_code}\n" \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36" \
+            https://avito-bot-2026.onrender.com/
