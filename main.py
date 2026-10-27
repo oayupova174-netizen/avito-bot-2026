@@ -66,7 +66,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
                 res = requests.get(
                     "https://platform-api2.max.ru/updates",
                     headers={"Authorization": max_token},
-                    timeout=10,
+                    timeout=30,
                     verify=get_max_ca_bundle()
                 )
                 body = res.text
@@ -325,7 +325,7 @@ def send_max_notification(candidate_name, candidate_city, candidate_age, candida
     try:
         res = requests.post(
             url, headers=headers, json={"text": message},
-            timeout=10, verify=get_max_ca_bundle()
+            timeout=30, verify=get_max_ca_bundle()
         )
         if res.status_code != 200:
             print(f"[ОШИБКА MAX API]: Код {res.status_code} - {res.text}", flush=True)
@@ -344,7 +344,7 @@ def init_max_updates_marker():
             "https://platform-api2.max.ru/updates",
             headers={"Authorization": MAX_BOT_TOKEN},
             params={"limit": 50},
-            timeout=10,
+            timeout=30,
             verify=get_max_ca_bundle()
         )
         if res.status_code == 200:
@@ -369,7 +369,7 @@ def send_max_question(text):
     try:
         res = requests.post(
             url, headers=headers, json={"text": text},
-            timeout=10, verify=get_max_ca_bundle()
+            timeout=30, verify=get_max_ca_bundle()
         )
         if res.status_code != 200:
             print(f"[ОШИБКА MAX ВОПРОС]: Код {res.status_code} - {res.text}", flush=True)
@@ -402,7 +402,7 @@ def process_max_replies(token, user_id):
         params["marker"] = max_updates_marker
 
     try:
-        res = requests.get(url, headers=headers, params=params, timeout=10, verify=get_max_ca_bundle())
+        res = requests.get(url, headers=headers, params=params, timeout=30, verify=get_max_ca_bundle())
         if res.status_code != 200:
             print(f"[ОШИБКА MAX UPDATES]: Код {res.status_code} - {res.text}", flush=True)
             return
