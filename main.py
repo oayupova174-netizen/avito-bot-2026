@@ -44,7 +44,7 @@ def get_max_ca_bundle():
 
 AVITO_CLIENT_ID = os.getenv("AVITO_CLIENT_ID")
 AVITO_CLIENT_SECRET = os.getenv("AVITO_CLIENT_SECRET")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN")
 MAX_CHAT_ID = os.getenv("MAX_CHAT_ID")
 
@@ -155,6 +155,8 @@ def generate_ai_reply(chat_history, vacancy_title="Менеджер по про�
     )
 
     system_prompt = f"""
+    Отвечай ТОЛЬКО на русском языке, даже если кандидат пишет на другом языке.
+
     Ты — реальный рекрутер юридической компании. Общаешься в чате Авито как живой человек: просто, вежливо, без роботоподобных фраз.
 
     ГЛАВНАЯ ЦЕЛЬ БОТА:
@@ -241,35 +243,35 @@ def generate_ai_reply(chat_history, vacancy_title="Менеджер по про�
         "human_question": "Суть вопроса кандидата для коллеги-рекрутера, если needs_human true, иначе пустая строка"
     }}
     """
-    url = "https://api.anthropic.com/v1/messages"
+    url = "https://api.deepseek.com/anthropic/v1/messages"
     headers = {
-        "x-api-key": ANTHROPIC_API_KEY,
+        "x-api-key": DEEPSEEK_API_KEY,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json"
     }
     payload = {
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 400,
+        "model": "deepseek-flash",
+        "max_tokens": 800,
         "system": system_prompt,
         "messages": chat_history
     }
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
         if response.status_code != 200:
-            print(f"[ОШИБКА CLAUDE API]: Код {response.status_code} - {response.text}", flush=True)
+            print(f"[ОШИБКА DEEPSEEK API]: Код {response.status_code} - {response.text}", flush=True)
             return {"reply_text": "", "status": "Подумать", "reason": "Ошибка API ИИ"}
-            
+
         res_data = response.json()
         content = res_data.get("content", [{}])[0].get("text", "").strip()
-        
+
         start_idx = content.find('{')
         end_idx = content.rfind('}')
         if start_idx != -1 and end_idx != -1:
             content = content[start_idx:end_idx+1]
-            
+
         return json.loads(content)
     except Exception as e:
-        print(f"[ОШИБКА CLAUDE EXCEPTION]: {e}", flush=True)
+        print(f"[ОШИБКА DEEPSEEK EXCEPTION]: {e}", flush=True)
         return {"reply_text": "", "status": "Подумать", "reason": "Сбой генерации"}
 
 def build_opening_message(vacancy_title="Менеджер по продажам"):
